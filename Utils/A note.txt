@@ -1,0 +1,5 @@
+We obtained the ECC lib from VeriCode. We renamed it to `ecc.lua` because the `~` in `~ecc.lua` was annoying me.
+
+(https://gist.github.com/MCJack123/7752c85918bcf23ada028abd615e8750)
+
+Why didn't we just use VeriCode? Because I didn't understand it but I do understand math libs. Also I wanted a challenge.

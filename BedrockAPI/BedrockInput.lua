@@ -7,6 +7,7 @@
     |            of the computercraft experience.              |
     +----------------------------------------------------------+
 ---------------------------------------------------------------]]
+
 local BedrockInput = {}
 -- Core module is needed to manage the resize events of display peripherals
 local coreModule = nil
@@ -15,17 +16,6 @@ local coreModule = nil
 local _keysHeld = {}
 -- The current registered KEY ONLY events
 local registeredKeyEvents = {}
-local debugItems = {
-    -- the debug device can be either a monitor or a debugger (if they exist)
-    debugDevice = nil,
-    debugMode = false,
-    debugLogging = {
-        enabled = false,
-        maxLinesShown = 5,
-        loggingCategories = {},
-
-    },
-}
 
 --[[+---------------------+
 ----| PERIPHERALS SECTION |
@@ -42,8 +32,105 @@ if _G.peripheralManager == nil then
         activeDevices = 0,
     }
 end
+--- @class monitor monitor
+--- @field getSize fun(): number, number
+--- @param genericObject table the generic object version of the peripheral
+--- @param object monitor the wrapped version of the peripheral
+--- @return table monitor the monitor object
+local function GetMonitor(genericObject, object)
+    local monitorObj = {
+        generic = object,
+        base = genericObject.base,
+        backgroundColor = object.getBackgroundColor(),
+        textColor = object.getTextColor(),
+        colors = {},
+        colorsInUse = {},
+        onResize = function() end,
+        buffers = {}
+    }
+    monitorObj.width, monitorObj.height = object.getSize()
+        monitorObj.onResize = function(ev, ourDisplay, display)
+        if display == ourDisplay.base.name then
+            monitorObj.hooks.onResize(ourDisplay.generic.getSize())
+            ourDisplay.width, ourDisplay.height = ourDisplay.generic.getSize()
+            monitorObj.buffers[1].reposition(1, 1, ourDisplay.width, ourDisplay.height)
+            monitorObj.buffers[2].reposition(1, 1, ourDisplay.width, ourDisplay.height)
+        else 
+            -- Not it!
+        end
+    end
+    return monitorObj
+end
 
-local function isPeripheralTypeConnected(pType) 
+local function GetSpeaker(genericObject, object)
+    local speakerObj = {
+        generic = object,
+        base = genericObject.base,
+        maxVolume = 100,
+        volume = 100,
+        tracks = {}, -- Up to 8 tracks can play at once, (Actually it's 8 per 1/20th of a second. Good luck with that math)
+        loadedStream = nil, -- Supports amplitudes from -128 to 127, played back at 48kHz. Buffer is about 128x1024 samples. Supports 8-bit pcm audio, but reencodes it. L
+        
+    }
+    return speakerObj
+end
+
+local function GetModem(genericObject, object)
+    local modemObj = {
+        generic = object,
+        base = genericObject.base,
+        isWireless = object.isWireless(),
+        openChannels = {},
+        openChannelCount = 0,
+    }   
+    return modemObj
+end
+
+local function GetPrinter(genericObject, object)
+    local printerObj = {
+        generic = object,
+        base = genericObject.base,
+        pageTitle = "",
+        paperWidth, paperHeight = object.getPaperSize(),
+        paperLevel = object.getPaperLevel(),
+        inkLevel = object.getInkLevel(),
+    }
+
+    return printerObj
+end
+
+local function GetDrivePeripheral(genericObject, object)
+    local drivePeripheralObj = {
+        generic = object,
+        base = genericObject.base,
+        diskInserted = object.isDiskPresent(),
+        diskID = object.getDiskID(),
+        mountPath = object.getMountPath(),
+    }
+    return drivePeripheralObj
+end
+
+local function GetComputer(genericObject, object)
+    local computerObj = {
+        generic = object,
+        base = genericObject.base,
+        computerID = object.getID(),
+        isOn = object.isOn(),
+    }
+    return computerObj
+end
+
+local function getStorage(genericObject, object)
+    local storagePeripheral = {
+        generic = object,
+        base = genericObject.base,
+        size = object.size(),
+        items = object.list()
+    }
+    return storagePeripheral
+end
+
+local function isPeripheralTypeConnected(pType)
     if type(pType) == "string" then
         return not (_G.peripheralManager.connectedDevices[pType])
     elseif (type(pType) == "table" and not (pType.base == nil)) then
@@ -66,15 +153,13 @@ end
 
 local function onPeripheralConnect(_ev, side)
     local peripheralObj = BedrockInput.GetPeripheralFromText(side)
-    if _G.peripheralManager.devices[peripheralObj.base.type] ~= nil and _G.peripheralManager.devices[peripheralObj.base.name] then
-        
-    end
-    AddPeripheral(peripheralObj) 
+    AddPeripheral(peripheralObj)
+    BedrockInput.hooks.onPeripheralConnect(peripheralObj)
 end
 
 
- function AddPeripheral(peripheralObj) 
-
+ function AddPeripheral(peripheralObj)
+    
     if (_G.peripheralManager.devices[peripheralObj.base.type] == nil) and ((not type(_G.peripheralManager.devices[peripheralObj.base.type]) == "table")) then
         _G.peripheralManager.connectedDevices = {}
     end
@@ -90,18 +175,19 @@ end
 end
 
 local function onPeripheralDetach(_ev, side)
-    --error("!")
     for i,v in pairs(_G.peripheralManager.connectedDevicesUnsorted) do
-        if v.base.side == side then
+        -- Side and name are analagous in CC
+        if v.base.name == side then
 
-            _G.peripheralManager.devices[v.base.type][v.base.name].base.hooks.onDisconnect()
-            --_G.peripheralManager.devices["term"]["term"].base.hooks.onDisconnect()
-
-
+            if (_G.peripheralManager.devices[v.base.type] ~= nil) and _G.peripheralManager.devices[v.base.type][v.base.name] ~= nil then
+                _G.peripheralManager.devices[v.base.type][v.base.name].base.hooks.onDisconnect()
+            end
+            
             v.isConnected = false
             _G.peripheralManager.connectedDevices[v.base.type][v.base.name] = nil
             _G.peripheralManager.connectedDevicesUnsorted[v.base.name] = nil
             _G.peripheralManager.activeDevices = _G.peripheralManager.activeDevices - 1
+            BedrockInput.hooks.onPeripheralDetach(v)
         end
     end
 
@@ -121,11 +207,13 @@ end
 --- @param Obj peripheral # The WRAPPED object gotten from peripheral.wrap
 local function getPeripheralFromObject(Obj)
     -- Get the generic peripheral, which provides a constant raw interface to any peripheral
-    local genericBase = GetGenericPeripheral(Obj) 
+    local genericBase = GetGenericPeripheral(Obj)
 
     local peripheralType = genericBase.type
-    if peripheralType == "computer" then
     
+    -- Switch statements? lmao I wish
+    if peripheralType == "computer" then
+
         return GetComputer(genericBase, Obj)
     elseif peripheralType == "drive" then
 
@@ -143,6 +231,9 @@ local function getPeripheralFromObject(Obj)
     elseif peripheralType == "monitor" then
 
         return GetMonitor(genericBase, Obj)
+    elseif peripheralType == "storage" then
+
+        return getStorage(genericBase, Obj)
     end
     
     return genericBase
@@ -183,9 +274,8 @@ function GetGenericPeripheral(peripheralObject)
             end
         end
 
-
         if periphMeta ~= nil then
-            peripheralObj.base.type = peripheral.getType(peripheralObject) 
+            peripheralObj.base.type = peripheral.getType(peripheralObject)
             peripheralObj.base.name = peripheral.getName(peripheralObject)
         end
         
@@ -197,11 +287,7 @@ function GetGenericPeripheral(peripheralObject)
     coreModule:createHook(peripheralObj.base, "onDisconnect", "string"):createHook(peripheralObj.base, "onReconnect", "string")
     
     if _G.peripheralManager.connectedDevices[peripheralObj.base.type] == nil or _G.peripheralManager.connectedDevices[peripheralObj.base.type][peripheralObj.base.name] == nil then
-        if _G.peripheralManager.connectedDevices[peripheralObj.base.type] == nil then 
-            _G.peripheralManager.connectedDevices[peripheralObj.base.type] = {}
-        end
-
-        _G.peripheralManager.connectedDevices[peripheralObj.base.type][peripheralObj.base.name] = peripheralObj
+        AddPeripheral(peripheralObj)
 
         return peripheralObj
     else
@@ -217,7 +303,9 @@ local function getGenericDisplayPeripheral(object)
     if _G.peripheralManager.connectedDevices[genericPeripheral.base.type][genericPeripheral.base.name].generic ~= nil then
         return _G.peripheralManager.connectedDevices[genericPeripheral.base.type][genericPeripheral.base.name].generic
     end
+
     assert(genericPeripheral.base.functions.write ~= nil, "Object isn't a display out.", 0)
+
     local displayPeripheral = {
         generic = object,
         base = genericPeripheral.base,
@@ -229,8 +317,9 @@ local function getGenericDisplayPeripheral(object)
     }
 
     coreModule:createHook(displayPeripheral, "onResize", "number", "number")
+
     displayPeripheral.onResize = function(ev, ourDisplay, display)
-        if display == ourDisplay.base.name then
+        if display == ourDisplay.base.name or ourDisplay.base.type == "term" then
             displayPeripheral.hooks.onResize(ourDisplay.generic.getSize())
             ourDisplay.width, ourDisplay.height = (ourDisplay.generic.getSize or ourDisplay.generic.getPageSize)()
             displayPeripheral.buffers[1].reposition(1, 1, ourDisplay.width, ourDisplay.height)
@@ -299,97 +388,9 @@ local function getGenericDisplayPeripheral(object)
         coreModule:registerEvent("monitor_resize", function(ev, display) displayPeripheral.onResize(ev, displayPeripheral, display) end)
     end
 
-    _G.peripheralManager.connectedDevices[displayPeripheral.base.type][displayPeripheral.base.name].generic = displayPeripheral --Circular? Yes. Be aware
-
+    AddPeripheral(displayPeripheral)
+    
     return displayPeripheral
-end
-
---- @class monitor monitor
---- @field getSize fun(): number, number
---- @param genericObject table the generic object version of the peripheral
---- @param object monitor the wrapped version of the peripheral
---- @return table monitor the monitor object
-function GetMonitor(genericObject, object)
-    local monitorObj = {
-        generic = object,
-        base = genericObject.base,
-        backgroundColor = object.getBackgroundColor(),
-        textColor = object.getTextColor(),
-        colors = {}, 
-        colorsInUse = {},
-        onResize = function() end,
-        buffers = {}
-    }
-    monitorObj.width, monitorObj.height = object.getSize()
-        monitorObj.onResize = function(ev, ourDisplay, display)
-        if display == ourDisplay.base.name then
-            monitorObj.hooks.onResize(ourDisplay.generic.getSize())
-            ourDisplay.width, ourDisplay.height = ourDisplay.generic.getSize()
-            monitorObj.buffers[1].reposition(1, 1, ourDisplay.width, ourDisplay.height)
-            monitorObj.buffers[2].reposition(1, 1, ourDisplay.width, ourDisplay.height)
-        else 
-            -- Not it!
-        end
-    end
-    return monitorObj
-end
-
-function GetSpeaker(genericObject, object)
-    local speakerObj = {
-        generic = object,
-        base = genericObject.base,
-        maxVolume = 100,
-        volume = 100,
-        tracks = {}, -- Up to 8 tracks can play at once, (Actually it's 8 per 1/20th of a second. Good luck with that math)
-        loadedStream = nil, -- Supports amplitudes from -128 to 127, played back at 48kHz. Buffer is about 128x1024 samples. Supports 8-bit pcm audio, but reencodes it. L
-        
-    }
-    return speakerObj
-end
-
-function GetModem(genericObject, object)
-    local modemObj = {
-        generic = object,
-        base = genericObject.base,
-        isWireless = object.isWireless(),
-        openChannels = {},
-        openChannelCount = 0,
-    }   
-    return modemObj
-end
-
-function GetPrinter(genericObject, object)
-    local printerObj = {
-        generic = object,
-        base = genericObject.base,
-        pageTitle = "",
-        paperWidth, paperHeight = object.getPaperSize(),
-        paperLevel = object.getPaperLevel(),
-        inkLevel = object.getInkLevel(),
-    }
-
-    return printerObj
-end
-
-function GetDrivePeripheral(genericObject, object)
-    local drivePeripheralObj = {
-        generic = object,
-        base = genericObject.base,
-        diskInserted = object.isDiskPresent(),
-        diskID = object.getDiskID(),
-        mountPath = object.getMountPath(),
-    }
-    return drivePeripheralObj
-end
-
-function GetComputer(genericObject, object)
-    local computerObj = {
-        generic = object,
-        base = genericObject.base,
-        computerID = object.getID(),
-        isOn = object.isOn(),
-    }
-    return computerObj
 end
 
 --[[+------------------+
@@ -398,6 +399,23 @@ end
     
 local eventsHeld = {}
 local nextID = 1
+
+-- A tell all denotation of a key. Pretty useful.
+local function createKeyDescriptor(_event, key, IsHeld, IsUp)
+    local keyDescriptor = {
+        type = "key",
+        keyID = key,
+        isHeld = IsHeld,
+        isUp = IsUp,
+    }
+    
+        keyDescriptor.keyName = type(key) == "number" and keys.getName(key) or "error"
+        if type(key) =="string" then
+            keyDescriptor.keyName = key
+        end
+
+    return keyDescriptor
+end
 
 -- Registers a key event, keys for event requires ALL keys in it to be down for it to fire
 local function registerKeyEvent(EventName, PressEventEffect, HeldEventEffect, ReleaseEventEffect, KeyboardStyle, KeysForEvent, ...)
@@ -409,7 +427,7 @@ local function registerKeyEvent(EventName, PressEventEffect, HeldEventEffect, Re
         pressEventEffect = (type(PressEventEffect) == "function" and PressEventEffect) or nil,
         heldEventEffect = (type(HeldEventEffect) == "function" and HeldEventEffect) or nil,
         releaseEventEffect = (type(ReleaseEventEffect) == "function" and ReleaseEventEffect) or nil,
-        keysForEvent = (type(KeysForEvent) == "table" and KeysForEvent) or {},  
+        keysForEvent = (type(KeysForEvent) == "table" and KeysForEvent) or {},
         keyboardStyle = type(KeyboardStyle) == "boolean" and KeyboardStyle or true, -- Basically whether the hold should be per frame or should be treated like a typing input or if it'll fire every frame after being hit
         keysHeld = {},
         requirementsMet = false
@@ -551,54 +569,28 @@ end
 
 -- Runs whenever a key is pressed, and also whenever they repeat from holding
 local function onKeyDown(_ev, key, isHeld)
-    --print("Key DOWN!")
-    --debugger.print("KEY DOWN: " .. key)
+
     local keyDescriptor = createKeyDescriptor(_ev, key, isHeld, false)
+
+    BedrockInput.hooks.onKeyDown(keyDescriptor)
     
     _keysHeld[keyDescriptor.keyID] = keyDescriptor
     handleKeyEvents(keyDescriptor)
 end
 
-
--- Runs whenever a key is released, probably???????????????
-    -- The probably part of this fixed. It was as a result of statistics and an event consumption issue
 local function onKeyUp(_ev, key)
-    --print("Key UP!")
-    --debugger.print("KEY UP: " .. key)
 
     local keyDescriptor = createKeyDescriptor(_ev, key, false, true)
+    
+    BedrockInput.hooks.onKeyUp(keyDescriptor)
 
     if _keysHeld[keyDescriptor.keyID] ~= nil then
-        _keysHeld[keyDescriptor.keyID] = nil 
+        _keysHeld[keyDescriptor.keyID] = nil
     end
 
     handleKeyEvents(keyDescriptor)
 end
-local function onChar(_ev, key)
-    local keyDescriptor = createKeyDescriptor(_ev, key, false, false)
 
-    handleKeyEvents(keyDescriptor)
-
-    keyDescriptor.isUp = _keysHeld[keyDescriptor.keyID] == nil 
-    handleKeyEvents(keyDescriptor)
-end
-
--- A tell all denotation of a key. Pretty useful.
-function createKeyDescriptor(_event, key, IsHeld, IsUp)
-    local keyDescriptor = {
-        type = "key",
-        keyID = key,
-        isHeld = IsHeld,
-        isUp = IsUp,
-    }
-    
-        keyDescriptor.keyName = type(key) == "number" and keys.getName(key) or "error"
-        if type(key) =="string" then
-            keyDescriptor.keyName = key
-        end
-
-    return keyDescriptor
-end
 
 --[[+--------------------+
 ----| LIFE CYCLE SECTION |
@@ -607,12 +599,14 @@ end
     -- The init function will return a table of things that any attached apis will use to complete init
     local function init(modules, core)
         coreModule = core
+        -- It's hook time; TODO: Add type checks
+        core:createHook(BedrockInput, "onPeripheralDetach")
+        core:createHook(BedrockInput, "onPeripheralConnect")
+        core:createHook(BedrockInput, "onKeyDown")
+        core:createHook(BedrockInput, "onKeyUp")
+        core:createHook(BedrockInput, "onKeyHeld")
+
         BedrockInput.RegisterAllPeripherals()
-        if debugItems.debugMode then
-            if true then -- TODO
-            
-            end
-        end 
     end
 
     local managerBackup = _G.peripheralManager
@@ -621,8 +615,24 @@ end
         if _G.peripheralManager == nil or next(_G.peripheralManager) == nil then
             _G.peripheralManager = managerBackup
         end
-        
+
+        --[[
+        if _G.peripheralManager.connectedDevices["modem"] ~= nil then
+            for i,v in pairs(_G.peripheralManager.connectedDevices["modem"]) do
+                -- Non wireless peripherals are our jurisdiction since they're for peripherals.
+                -- Or at least they would be if there was a way to detect if a peripheral hub is actually on.
+                if not v.isWireless() then
+                    
+                end
+            end  
+        end]]
+
         managerBackup = _G.peripheralManager
+
+        for i,v in pairs(_keysHeld) do
+            -- Completely unfilterable! Man it's almost like we have another better tool for this in this API.
+            BedrockInput.hooks.onKeyHeld(v)
+        end
 
         for i,v in pairs(eventsHeld) do
             if v.requirementsMet then
@@ -666,8 +676,7 @@ BedrockInput = {
                 eventFunction = onPeripheralDetach
             },
         },
-        version = "0.0.0",
-        priority = 1
+        version = "0.0.0"
     },
     keysHeld = _keysHeld,
     RegisterKeyEvent = registerKeyEvent,

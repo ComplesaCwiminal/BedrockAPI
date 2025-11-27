@@ -23,17 +23,19 @@ if not firstLoad then
         _G.BedrockCore = {}
         _G.BedrockCore.enforceSingleness = true
     else
-        return _G.BedrockCore.CoreReference()
+        local refrence = _G.BedrockCore.CoreReference()
+        refrence.id = math.random(1, 0xFFFFFFFFFFFFFF)
+        return refrence
     end
 end
 --_G.BedrockCore = BedrockCore
 
-local selfReference = debug.getinfo(1, "S")
+-- nonces? outside of cryptography???? WHAT
+local nonces = {}
 
 -- Basically we only accept calls from our trustedCaller
-local trustedCaller = debug.getinfo(3, "S")
-    -- Preventing a potential edge case where require in real CC envs are not just a function
-    trustedCaller = trustedCaller or debug.getinfo(2, "S")
+local trustedCaller = math.random(1, 0xFFFFFFFFFFFFFF)
+
 local regenerateCoreReference = function ()
     -- This is overwritten near the end. This declaration is so lua doesn't complain we don't have a function with this name
     error("Illegal State! Function called before program run?")
@@ -51,23 +53,23 @@ local shared = {
 }
 
 local nameIDpair = {}
-    local function addSharedValue(Value, Name)
+local function addSharedValue(Value, Name)
 
         if nameIDpair[Name] ~= nil and (Name ~= "" or Name ~= nil) then
             return false, "Name already exists! Consider modifying?"
         end
+
         -- The value with some metadata
         local addedValue = {
             name = Name,
             id = nil,
             value = Value,
             size = #Value or 1,
-
             --Core will ignore these two when internally removing it (it'll call it, but ignore it's return)
             -- This is our equivalent of {get; set;}
 
             -- Use to add conditions to removing your value
-            onRemove = function ()
+            onRemove = function (self)
                 return true
             end,
 
@@ -76,19 +78,19 @@ local nameIDpair = {}
                 return true, newValue
             end,
 
-            -- Use to declare how you want to be read. Don't want to be read? Error or return nil.
+            -- Use to declare how you want to be read. Don't want to be read? Return nil or false in the first slot... or error; That's funny too.
             onRead = function (self)
                 return true, self.value
             end
 
         }
 
-        local addShared
+        local addShared = true
 
-        for i,v in ipairs(registeredCores) do
-            -- Basically if anyone returns anything we say that's an acceptance and continue to our own checks
-            addShared = v.hooks.PreAddSharedValue(Value, addedValue) or addShared
-            if addShared ~= nil then 
+        for i,v in pairs(registeredCores) do
+            -- Basically if anyone returns anything we say that's a denial and continue to our own checks
+            addShared = v.hooks.PreAddSharedValue(Value, addedValue) == nil
+            if addShared == false then
                 break
             end
         end
@@ -101,33 +103,37 @@ local nameIDpair = {}
             nameIDpair[addedValue.name] = addedValue.id
 
             -- So you can modify your getters and setters.
-            return addedValue
+            return true, addedValue
         end
 
         -- We failed.
         return false, "Value addition declined"
     end
 
-    local function removeSharedValue(id)
+    local function removeSharedValue(id, ...)
+        local key = id
         -- Convert the name into an ID
-        if type(id) == "string" then
-            id = nameIDpair[id] 
+    if type(id) == "string" then
+            id = nameIDpair[id]
             if id == nil then
                 return false, "Invalid ID reference"
             end
         elseif type(id) == "table" then
+            key = id.name
             id = id.id
         end
 
-        if shared[id] ~= nil and shared[id].onRemove ~= nil and shared[id].onRemove() then
+        if shared[id] ~= nil and shared[id].onRemove ~= nil and shared[id]:onRemove(...) then
+            nameIDpair[key] = nil
             shared[id] = nil
             return true
         end
+        
         return false, "No value found!"
     end
 
     -- Get object by ID
-    local function getSharedValue(id)
+    local function getSharedValue(id, ...)
         -- Convert the name into an ID
         if type(id) == "string" then
             id = nameIDpair[id]
@@ -139,27 +145,28 @@ local nameIDpair = {}
         end
 
         if shared[id] ~= nil and shared[id].onRead ~= nil  then
-            local values = table.pack(shared[id]:onRead())
+            local values = table.pack(shared[id]:onRead(...))
             local allowRead = table.remove(values, 1)
             if not allowRead then
-                return false, "You are not allowed to read this value!" 
+                return false, "You are not allowed to read this value!"
             else
-                return table.unpack(values)
+                return true, table.unpack(values)
             end
         end
         return false, "No value found!"
     end
-    local function modifySharedValue(id, newValue)
+    
+    local function modifySharedValue(id, newValue, ...)
         if type(id) == "string" then
-            id = nameIDpair[id] 
+            id = nameIDpair[id]
             if id == nil then
                 return false, "Invalid ID reference"
             end
         end
 
-        local continue, computedValue = shared[id]:onModify(newValue)
+        local continue, computedValue = shared[id]:onModify(newValue, ...)
         if shared[id] ~= nil and shared[id].onModify ~= nil and continue then
-            shared[id] = computedValue
+            shared[id].value = computedValue
             return true, "Success"
         end
         return false, "No value found!"
@@ -185,7 +192,8 @@ local nameIDpair = {}
             end 
         end
     end
-    debug.sethook(checkDeprecated, "c")
+        -- If a CraftOS-PC debugger is attached you aren't allowed to set hooks. 
+        --pcall(debug.sethook, checkDeprecated, "c")
 
     function CoreBuilder:deprecateFunction(Func, ExtraInfo, Severity)
         local deprecationBody = {
@@ -207,6 +215,9 @@ local nameIDpair = {}
     --- @param hookName string
     --- @param ... any -- The type that params the hook uses expects. Doesn't need a real variable, and won't use it, anyway.
     function CoreBuilder:createHook(obj, hookName, ...)
+        if obj == nil or type(hookName) ~= "string" then
+            return self, false
+        end 
 
         local hookBase = {
             funcs = {},
@@ -283,21 +294,16 @@ local nameIDpair = {}
         -- create the hook on the actual object we were given.
         obj.hooks[hookName] = hookBase
 
-        return self
+        return self, true
     end
     -- If you want to delete a hook just set it to nil. We have no tracking we need to do with it.
 
 --- Cleans up all attached core in preperation for shutdown. Can only be called by a trusted caller
-local function APICleanup(disallowShutdown, sourceOverride)
+local function APICleanup(ID, disallowShutdown)
 
-
-    local caller = debug.getinfo(2, "S")
-    if disallowShutdown then
-        caller = sourceOverride or caller
-    end
     -- Hey its me. A private method. God I wish.
         -- Someone tell lua we already had a good solution for this.
-    if (trustedCaller ~= nil and trustedCaller.source == caller.source) or selfReference.source == caller.source then
+    if (trustedCaller ~= nil and trustedCaller == ID) then
         for i,v in pairs(registeredCores) do
             for i2,v2 in pairs(v.modules) do
                 -- Avoiding a quick stack overflow
@@ -311,16 +317,13 @@ local function APICleanup(disallowShutdown, sourceOverride)
             trustedCaller = nil
             _G.BedrockCore = nil
             registeredCores = {}
-            debug.sethook(nil, "c")
+            pcall(debug.sethook,nil, "c")
         else
-            trustedCaller = caller
+            trustedCaller = ID
         end
     elseif trustedCaller ~= nil then
         return nil, "You aren't the owner of this module!"
     else 
-        trustedCaller = trustedCaller or "nil"
-        print(trustedCaller or "nil",trustedCaller ~= "nil" and trustedCaller.source or "nil")
-        print(debug.getinfo(2, "S").source)
         -- Just in case
         _G.BedrockCore = nil
         firstLoad = true
@@ -437,7 +440,7 @@ local function checkVersion(versionGot, versionExpected, operand)
 
         -- We can't unconditionally return, because if it's not equal it could be less than or greater than
         if isEqual then
-            return true 
+            return true
         end
     end
 
@@ -473,7 +476,7 @@ local function resolveDependencies(core, module)
                 
                 assert(coreModules[v2.moduleName] ~= nil, "Module " .. module.moduleDefinition.moduleName .. " is missing dependency " .. v2.moduleName .. "!")
                 if not checkVersion(coreModules[v2.moduleName].moduleDefinition.version, v2.version, v2.operand) then
-                    error("Version of module:" .. module.moduleDefinition.moduleName .. " is incorrect! (Expected version " .. v2.minimumVersion .. " or higher, Got version " .. coreModules[v2.moduleName].moduleDefinition.version)
+                    error("Version of module:" .. v2.moduleName .. " is incorrect! (Expected version " .. v2.version .. " or higher, Got version " .. coreModules[v2.moduleName].moduleDefinition.version, 0)
                 end
                 returnedModules[v2.moduleName] = coreModules[v2.moduleName]
             end
@@ -483,12 +486,11 @@ local function resolveDependencies(core, module)
                     returnedModules[v2.moduleName] = coreModules[v2.moduleName]
                 end
             end
-
             for _,v2 in ipairs(module.moduleDefinition.dependencies.conflicts) do
                 -- If you pcall it and force it to go through then we'll force conflicts to go through
                 if coreModules[v2.moduleName] ~= nil and checkVersion(coreModules[v2.moduleName].moduleDefinition.version, v2.version, v2.operand) then
                     coreModules[v2.moduleName] = nil
-                    error("Module " .. module.moduleDefinition.moduleName .. " has conflicting dependency, " .. v2.moduleName .. "!")
+                    error("Module " .. module.moduleDefinition.moduleName .. " has conflicting dependency, " .. v2.moduleName .. "!", 0)
                 end
                 returnedModules[v2.moduleName] = coreModules[v2.moduleName]
             end
@@ -500,22 +502,26 @@ end
 
 --- Dispatches events to interested observers; DO NOT CALL ON YOUR OWN. THERE IS ONLY ONE PLACE THIS SHOULD BE USED
 --- Also this is infinitely blocking. Excluding errors, or termination.
-local function eventHandler(focus)
+local function eventHandler(nonce)
     while true do
-        local event = table.pack(os.pullEvent())
+        -- pullEventRaw as we are not prescriptive to what is done with the handler.
+        -- For safety reasons if there are no attached handlers in any core we'll throw on terminate
+        local event = table.pack(os.pullEventRaw())
         local eventName = event[1]
+        local doTerminate = eventName == "terminate" -- It only CAN be true if it's a terminate
             for _,v in pairs(registeredCores) do
-            if (multishell ~= nil and focus == multishell.getCurrent()) or true then 
-                if v.focus == focus then
+            if multishell == nil or v.nonce == nonce then
                     local flaggedEventFuncs = {}
                     if v.events ~= nil then
                         flaggedEventFuncs = {}
                         for i2, v2 in pairs(v.events) do
-                            if v2.eventName == eventName then
+                            doTerminate = false -- If v.events is empty this never runs. Fulfilling our condition
+                            -- maybe a switch table might be better at this point? not sure.
+                            if v2.eventName == eventName or v2.eventName == nil or v2.eventName == "" then
                                 table.insert(flaggedEventFuncs, function ()
                                     local success, message = pcall(v2.eventFunction, table.unpack(event))
                                     if not success then
-                                        v.hooks.onEventError(event, message, v2)
+                                        v.hooks.onEventError(event, tostring(message), v2)
                                         local results = v.hooks.onEventError.results
                                         if not results then
                                             error(message, 3)
@@ -524,13 +530,13 @@ local function eventHandler(focus)
                                 end)
                             end
                         end
-                        local success, message = pcall(function() parallel.waitForAll(table.unpack(flaggedEventFuncs)) end) 
-                        if not success then
-                            error(message, 3)
-                        end
+                        parallel.waitForAll(table.unpack(flaggedEventFuncs))
                     end
-                end
             end
+        end
+        if doTerminate then
+            -- This is how the 'terminated' event/error works in base CC.
+            error("Terminated", 0)
         end
     end
 end
@@ -570,48 +576,45 @@ end
 
 --- Queues a callback at a later REAL TIME point. 
 function CoreBuilder:queueTimer(ms, callbackFunc)
-    assert(type(ms) == "number", string.format("Time given (%d) is not a number!", ms))
+    assert(type(ms) == "number", string.format("Time given (%s) is not a number!", tostring(ms)))
     assert(type(callbackFunc) == "function", string.format("Callback given (%s) is not a function!", tostring(callbackFunc)))
-
+    self.numTimers = self.numTimers + 1
     local timer = {
         maxDuration = ms,
         duration = ms,
         callback = callbackFunc,
-        justAdded = true
+        justAdded = true,
+        id = self.numTimers,
+        isCancelled = false,
     }
     
     self.hooks.onTimerAdded(timer)
-    table.insert(self.timers, timer)
-    timer.Cancel = function ()
-        self.hooks.onTimerRemoved(timer)
+    self.timers[timer.id] = timer
+    timer.Cancel = function (ourself)
+        self.hooks.onTimerRemoved(ourself)
         -- Finds our timer and deletes it completely. Just entirely
-        for i2,v2 in ipairs(self.timers) do
-            if v2 == timer then
                 -- The removal of organic substances has now begun
-                table.remove(self.timers, i2)
-                timer = nil
-                break
-            end
-        end
+                ourself.isCancelled = true
+                ourself.callback = function () end -- just in case.
     end
     return self, timer
 end
 
 function CoreBuilder:new()
-    local caller = debug.getinfo(2, "f").func
+
     local builder = {
         timers = {},
-        func = caller,
-        focus = multishell ~= nil and multishell.getCurrent() or 1,
-        isBuilt = false
+        isBuilt = false,
+        hooks = {},
+        numTimers = 0,
+        threads = {},
+        isNew = true
+        
     }
 
+    setmetatable(builder, {__index = self})
 
-    setmetatable(builder, self)
-    
-    
-    
-    self.__index = self
+    builder.__index = self
     
     -- 500 ̶c̶i̶g̶a̶r̶e̶t̶t̶e̶s hooks
 
@@ -619,21 +622,21 @@ function CoreBuilder:new()
     --- @param attachedCoreModules table # The modules in the core
     --- @param module table # The module modified
 
-    self:createHook(self, "onModuleAdd", "table", "table"):createHook(self, "onModuleRemove", "table", "table")
+    builder:createHook(builder, "onModuleAdd", "table", "table"):createHook(builder, "onModuleRemove", "table", "table")
 
     --- On Build hook
     --- @param modules table # The attached modules at time of build
-    self:createHook(self, "onBuild", "table")
+    builder:createHook(builder, "onBuild", "table")
 
     --- @param deltaTime number # deltatime
     --- @param core table # the core that updated
-    self:createHook(self, "onUpdate", "number", "table")
+    builder:createHook(builder, "onUpdate", "number", "table")
 
     --- Timer Hooks
     --- @param timerObj table # an object representing the added timer
-    self:createHook(self, "onTimerAdded", "table")
-    self:createHook(self, "onTimerRemoved", "table")
-    self:createHook(self, "onTimerElapsed", "table")
+    builder:createHook(builder, "onTimerAdded", "table")
+    builder:createHook(builder, "onTimerRemoved", "table")
+    builder:createHook(builder, "onTimerElapsed", "table")
 
     
     
@@ -642,28 +645,31 @@ function CoreBuilder:new()
     --- @param message string
     --- @param errorFunc table
     --- @return table | boolean # whether to throw or not
-    self:createHook(self, "onModuleError", "table", "table", "string", "any")
+    self:createHook(builder, "onModuleError", "table", "table", "any", "any")
 
     --- @param event table # The CC event.
     --- @param message string # The error message
     --- @param erroredEvent table # The event object we make
-    self:createHook(self, "onEventError", "table", "string", "table")
+    builder:createHook(builder, "onEventError", "table", "any", "table")
 
-    self:createHook(self, "onDeprecatedCall", "function", "any", "number")
+    builder:createHook(builder, "onDeprecatedCall", "function", "any", "number")
 
     -- Pattern is message, severity, level, extras
-    self:createHook(self, "Log", "string", "string", "number")
+    builder:createHook(builder, "Log", "any", "string", "number")
 
 
     -- Used to precheck the shared value before we add it
     -- it's params are the object and it's metadata
-    self:createHook(self, "PreAddSharedValue", "any", "table")
-    
+    builder:createHook(builder, "PreAddSharedValue", "any", "table")
+
     -- We add ourself for other modules to use our features. Do account for this. Please.
-    self:addModule(BedrockCore)
+    builder:addModule(BedrockCore)
+    
     -- This is just for logging. It won't save the program if it's in peril, here. Other places though
-    self.hooks.onModuleError.addHook(function(allModules, moduleAtFault, errMsg, func) return builder.hooks.Log(errMsg, "error", 2, allModules, moduleAtFault) end)
-    self.hooks.onEventError.addHook(function(event, errMsg, evObj) builder.hooks.Log(errMsg, "error", 2, evObj, event) end)
+    builder.hooks.onModuleError.addHook(function(allModules, moduleAtFault, errMsg, func) return builder.hooks.Log(errMsg, "error", 2, allModules, moduleAtFault) end)
+    builder.hooks.onEventError.addHook(function(event, errMsg, evObj)
+    builder.hooks.Log(errMsg, "error", 2, evObj, event) end)
+
 
     return builder
 end
@@ -678,7 +684,7 @@ function CoreBuilder:addModule(module)
         
         local givenModules = resolveDependencies(self, module)
 
-        module.moduleDefinition.Init(givenModules, self.__index)
+        module.moduleDefinition.Init(givenModules, self)
         for i2,v2 in pairs(module.moduleDefinition.events) do
             self:registerEvent(v2.eventName, v2.eventFunction)
         end
@@ -695,9 +701,7 @@ function CoreBuilder:addModule(module)
         -- I'm playing with fire here.
         --error("You can't modify modules in a built core!")
     end
-    
 
-    
     self.hooks.onModuleAdd(self.modules, module)
     return self
 end
@@ -723,8 +727,6 @@ function CoreBuilder:removeModule(module)
             return self, false, "Module not found!"
         end
     if self.isBuilt then
-
-
         -- make sure no module needed that one.
         for i,v in ipairs(self.modules) do
             -- If this exists, then feed in the modules
@@ -748,21 +750,13 @@ function CoreBuilder:build()
         self.DeltaTime = 0
         self.timeOfLastFrame = os.epoch("utc")
 
-        if registeredCores[self.focus] ~= nil then
-            registeredCores[self.focus].hooks.Log("Forced shutdown from invalid state!", "fatal", 1, self)
-            self.hooks.Log("Previous core improperly shut down!", "warning", 1)
-            registeredCores[self.focus]:Cleanup(true, debug.getinfo(2, "S")) -- Even the ones who should not exist deserve cleanup
-            registeredCores[self.focus] = nil 
-        end
-        registeredCores[self.focus] = self
+        table.insert(registeredCores, self)
         for _,v in ipairs(self.modules) do
-            
-            
             local givenModules = resolveDependencies(self, v)
             -- check if this module has deps
 
             -- Hand over only our functions and the needed modules
-            v.moduleDefinition.Init(givenModules, self.__index)
+            v.moduleDefinition.Init(givenModules, self)
             for i2,v2 in pairs(v.moduleDefinition.events) do
                 self:registerEvent(v2.eventName, v2.eventFunction)
             end
@@ -782,7 +776,12 @@ function CoreBuilder:build()
     return self
 end
 
-
+function CoreBuilder:addThread(Coroutine, Precon, ...)
+    local params = table.pack(...)
+    table.insert(self.threads, {routine = Coroutine, precon = function ()
+       Precon(table.unpack(params))
+    end})
+end
 function CoreBuilder:Cleanup(disallowShutdown)
     parallel.waitForAny(function() os.sleep(2) end, function ()
         if self ~= nil then
@@ -792,6 +791,7 @@ function CoreBuilder:Cleanup(disallowShutdown)
                     pcall(v.moduleDefinition.Cleanup)
                 end
             end
+            local selfFound = false
             for i,v in pairs(registeredCores) do
                 if v == self then
                     table.remove(registeredCores, i)
@@ -799,18 +799,22 @@ function CoreBuilder:Cleanup(disallowShutdown)
                 end
             end
             if #registeredCores == 0 then
-                APICleanup(disallowShutdown)
+                APICleanup(trustedCaller, disallowShutdown)
             end
         end
     end)
 end
 
-local function update(focus)
+local function update(nonce)
     while not terminate do
         local coreRunners = {}
         for i,v in pairs(registeredCores) do
-            if (multishell ~= nil and focus == multishell.getCurrent()) or true then 
-            if v.focus == focus then
+            if v.isNew == true then
+                v.nonce = nonce
+                v.isNew = false
+            end
+
+            if v.nonce == nonce then
                 table.insert(coreRunners, function ()
                 v.DeltaTime = os.epoch("utc") - v.timeOfLastFrame
                 v.timeOfLastFrame = os.epoch("utc")
@@ -818,29 +822,48 @@ local function update(focus)
                 
                 local completedTimers = {}
                 local newTimers = {}
-                for i2,v2 in pairs(v.timers) do
-                    v2.duration = v2.duration - v.DeltaTime
-                    if v2.justAdded then
-                        table.insert(newTimers, i2)
+
+                local iterated = 0
+                -- Having this as i2 sometimes throws errors. Swapping it's name fixed it. I will not figure out why.
+                for ia,vb in pairs(v.timers) do
+                    iterated = iterated + 1
+                    vb.duration = vb.duration - v.DeltaTime
+                    if vb.justAdded then
+                        table.insert(newTimers, ia)
                     end
 
-                    if v2.duration <= 0 and not v2.justAdded then
-                        v.hooks.onTimerRemoved(v2)
-                        v.hooks.onTimerElapsed(v2)
-                        v2.callback(v2.maxDuration - v2.duration) -- Incorporate the exact time it took to elapse. The subtraction of duration is there to represent how much over the time we are.
-                        table.insert(completedTimers, i2)
+                    if vb.duration <= 0 and not vb.justAdded and not vb.isCancelled then
+                        v.hooks.onTimerRemoved(vb)
+                        v.hooks.onTimerElapsed(vb)
+                        vb.callback(vb.maxDuration - vb.duration) -- Incorporate the exact time it took to elapse. The subtraction of duration is there to represent how much over the time we are.
+                        table.insert(completedTimers,ia)
+                        vb.isCancelled = true
+                    end
+                    
+                    if vb.isCancelled then
+                        table.insert(completedTimers,ia) -- Technically false but it should be removed anyway.
                     end
                 end
 
                 for i2,v2 in ipairs(completedTimers) do
                     v.timers[v2] = nil
                 end
+                
                 -- Prevents timer callbacks that add timers from having the ability to lock up thread.
                 for i2,v2 in ipairs(newTimers) do
                     v.timers[v2].justAdded = false
                 end
 
                 local coremains = {}
+
+                for i,v in pairs(v.threads) do
+                    table.insert(coremains, function ()
+                        if coroutine.status(v.routine) ~= "dead" and (v.precon ~= nil and v.precon() or true) then
+                            coroutine.resume(v.routine)
+                        end
+                    end)
+                end
+                
                 for i2,v2 in pairs(v.modules) do
                     -- An approximation for time slicing
                     if not v2.moduleDefinition.runRate or v2.moduleDefinition.runRate <= 0 then
@@ -850,7 +873,7 @@ local function update(focus)
                             if not success then
                                 local results = v.hooks.onModuleError(v.modules, v2, message, debug.getinfo(2, "fSl"))
                                 if not results then
-                                    error(message, 3)
+                                    error(message ~= "" and (message or "Error message is nil?") or "Empty string as error message?", 3)
                                 end
                             end
                         end)
@@ -860,7 +883,6 @@ local function update(focus)
                 --How much parallelism is too much parallelism?
                 parallel.waitForAll(table.unpack(coremains))
                 end)
-            end
             end
         end
 
@@ -881,16 +903,30 @@ local function cleanup()
 end
 
 local function tick()
-    -- Consider centralizing or semi centralizing event handling....
+    
+    -- finally I murdered my multishell nemesis. You'd be surprised
+    local nonce = math.random(1, 0xFFFFFFFFFFFF) -- probably wrote that right
 
+    while nonces[nonce] ~= nil do
+        nonce = math.random(1, 0xFFFFFFFFFFFF)
+    end
+
+    nonces[nonce] = true
+    
+    -- Consider centralizing or semi centralizing event handling....
+    
         -- We give out references to the original after the first load
         firstLoad = false
         -- Normally this is infinitely blocking, so if we get past this line we've errored.
-        local _, message = pcall(parallel.waitForAny, function () eventHandler(multishell ~= nil and multishell.getFocus() or 1) end, function ()
-            update(multishell ~= nil and multishell.getFocus() or 1)
+        local success, message = pcall(parallel.waitForAny, function () eventHandler(nonce) end, function ()
+            update(nonce)
         end)
-        APICleanup()
-        error(message, 0) -- This does offer more stability. Though I'm worried that rethrown errors will lose context...
+
+        registeredCores[multishell ~= nil and (multishell.getCurrent() or 1) or 1].Cleanup()
+        
+        term.redirect(term.native())
+
+        error(message or "Messageless error thrown during tick!", 0) -- This does offer more stability. Though I'm worried that rethrown errors will lose context...
         -- Use the error hook I guess...?
 end
 
@@ -898,10 +934,16 @@ end
 local function coreReference()
     local table = {}
     for i,v in pairs(BedrockCore) do
-        table[i] = v 
+        table[i] = v
     end
+
+    table.id = nil
+    table.hooks = nil
+
     return table
 end
+
+local newVal
 
 local function regenerateCoreReference()
     if firstLoad then
@@ -931,8 +973,7 @@ local function regenerateCoreReference()
             },
 
             -- only core gets shared. (If you follow best practice) only it's allowed to inherently hold random info
-
-            version = "0.0.0" -- I don't know how to version. So I'll figure this out on release. Nobody else is here to judge anyway.
+            version = "0.2.0+requiresVersionCheck" -- I don't know how to version. So I'll figure this out on release. Nobody else is here to judge anyway.
         },
         coreBuilder = CoreBuilder,
         Tick = tick,
@@ -944,16 +985,73 @@ local function regenerateCoreReference()
         GetSharedValue = getSharedValue,
         ModifySharedValue = modifySharedValue,
         enforceSingleness = false,
-        CoreReference = coreReference
-
-
+        CoreReference = coreReference,
+        checkVersion = checkVersion,
+        id = trustedCaller
     }
     end
 
     if not BedrockCore.enforceSingleness then
-        _G.BedrockCore = coreReference()
-        _G.BedrockCore.hooks = nil -- CORE hooks aren't given out to just anyone. -- Why'd I capitalize Core like that; This isn't undertale.
-    else 
+        local ref = coreReference()
+        ref.hooks = nil -- CORE hooks aren't given out to just anyone. -- Why'd I capitalize Core like that; This isn't undertale.
+        local coreMT = {__index = ref, __newindex = function (t,k,v)
+            if k == "id" then
+                t[k] = v
+            end
+            -- lmao ignored
+        end, __metatable = nil}
+
+        local mtRef = {}
+
+        setmetatable(mtRef, coreMT)
+
+        local globalMT = getmetatable(_G) -- Hmmmmmm
+
+        local oldMT = globalMT
+        globalMT = {__newindex = function (t, k, v)
+            -- But I can't just let them override this key, though.
+            if k == "BedrockCore" then
+                if v == trustedCaller then
+                    globalMT.__core = newVal -- newval is defined elsewhere. Look I can't use a fourth arg okay?
+                end
+                return
+            end
+
+            -- We're not trying to override any preexisting behavior. 
+            if type(oldMT) == "table" then
+                if type(oldMT.__newindex) == "function" then
+                    oldMT.__newindex(t,k,v)
+                end
+
+                return
+            end
+
+            rawset(t,k,v)
+        end, __index = function (t,k)
+            if k == "BedrockCore" then
+                return globalMT.__core
+            end
+
+            if type(oldMT) == "table" then
+                if type(oldMT.__index) == "function" then
+                    return oldMT.__index(t,k)
+                elseif type(oldMT.__index) == "table" then
+                    return oldMT.__index[k]
+                end
+            end
+            return rawget(t,k)
+        end, __core = mtRef}
+
+        if oldMT ~= nil then
+            for i,v in pairs(oldMT) do
+                if globalMT[i] == nil then
+                    globalMT[i] = v
+                end
+            end
+        end
+
+        setmetatable(_G, globalMT)
+    else
         _G.BedrockCore = {}
     end
 end

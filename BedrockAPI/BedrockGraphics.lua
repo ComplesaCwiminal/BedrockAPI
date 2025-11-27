@@ -21,10 +21,8 @@
     local monitors = {}
 
     local DOMs = {}
-    
-    -- Should probably move this into something like bedrockUtils
 
-    local debugger = peripheral.find("debugger")
+    local maxObjID = 0
 
     --- Searches a table for an object and returns it if it exists
     --- @param tbl table
@@ -33,7 +31,7 @@
     ---@return any
     local function table_contains(tbl, x)
         for i, v in pairs(tbl) do
-            if v == x then 
+            if v == x then
                 return i, v
             end
         end	
@@ -50,54 +48,87 @@
     --- @param object gObject
     ---@param monitor genericMonitor
     local defaultMaterial = function (object, monitor)
-        -- This works the same in practice as math.floor. Why this option?
-        local epsilon = .001
-        local origColor = term.getTextColor();
-        local cursorPrevX,cursorPrevY = term.getCursorPos();
-        local prevBGColor = term.getBackgroundColour();
 
-        local objBGColor = object.DOM.getColor(object.computedValues.style.bgColor or -1, monitor)
-        local objTextColor = object.DOM.getColor(object.computedValues.style.textColor or -1, monitor)
-        local objStrokeColor = object.DOM.getColor(object.computedValues.style.strokeColor or -1, monitor)
+        local preRender
+        if object.computedValues.style.shaders ~= nil then
+            preRender = object.computedValues.style.shaders.preRender
+        end
 
-        if not ( objBGColor == nil) and (objBGColor > -1) then
-            paintutils.drawFilledBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), objBGColor)
+        local cancelRender = false
+        if preRender ~= nil then
+            for i,v in pairs(preRender) do
+                    if type(v) == "function" then
+                        cancelRender = v(object, i,monitor)
+                    end
+            end
         end
-        
-        if not ( object.style.strokeColor == nil) and (object.style.strokeColor > -1) then
-            paintutils.drawBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), object.style.strokeColor)
-            term.setBackgroundColor(prevBGColor)
-        end
-        if(objTextColor ~= nil and (objTextColor ~= -1)) then
-            term.setTextColor(objTextColor)
+
+        if not cancelRender then
+            -- This works the same in practice as math.floor. Why this option?
+            local epsilon = .001
+            local origColor = term.getTextColor();
+            local cursorPrevX,cursorPrevY = term.getCursorPos();
+            local prevBGColor = term.getBackgroundColour();
+
+            local objBGColor = object.DOM.getColor(object.computedValues.style.bgColor or -1, monitor)
+            local objTextColor = object.DOM.getColor(object.computedValues.style.textColor or -1, monitor)
+            local objStrokeColor = object.DOM.getColor(object.computedValues.style.strokeColor or -1, monitor)
+
             if not ( objBGColor == nil) and (objBGColor > -1) then
-                term.setBackgroundColor(objBGColor)
+                paintutils.drawFilledBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), objBGColor)
             end
-            local tokens = {}
-            for s in object.innerText:gmatch("[^\r\n]+") do
-                table.insert(tokens, s)
+            
+            if not ( object.style.strokeColor == nil) and (object.style.strokeColor > -1) then
+                paintutils.drawBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), object.style.strokeColor)
+                term.setBackgroundColor(prevBGColor)
             end
-
-            for num,v in ipairs(tokens) do
-                -- I want 0 indexing.
-                local offset = num - 1
-
-                if object.style.textAlign == nil or object.style.textAlign == "centered" then
-                    term.setCursorPos((((object.w / 2) + object.computedValues.x) - (#v / 2)), ((object.h / 2) + object.computedValues.y + offset) - math.floor(#tokens / 2))
-                elseif object.style.textAlign == "topleft" then
-                    term.setCursorPos(object.computedValues.x, (object.computedValues.y + offset))
+            if(objTextColor ~= nil and (objTextColor ~= -1)) then
+                term.setTextColor(objTextColor)
+                if not ( objBGColor == nil) and (objBGColor > -1) then
+                    term.setBackgroundColor(objBGColor)
                 end
-                
-                term.write(v)
+                local tokens = {}
+                for s in object.innerText:gmatch("[^\r\n]+") do
+                    table.insert(tokens, s)
+                end
+
+                for num,v in ipairs(tokens) do
+                    -- I want 0 indexing.
+                    local offset = num - 1
+
+                    if object.style.textAlign == nil or object.style.textAlign == "centered" then
+                        term.setCursorPos((((object.w / 2) + object.computedValues.x) - (#v / 2)), ((object.h / 2) + object.computedValues.y + offset) - math.floor(#tokens / 2))
+                    elseif object.style.textAlign == "topleft" then
+                        term.setCursorPos(object.computedValues.x, (object.computedValues.y + offset))
+                    end
+                    
+                    term.write(v)
+                end
+            end
+            
+            term.setTextColor(origColor)
+            term.setBackgroundColor(prevBGColor)
+            term.setCursorPos(cursorPrevX,cursorPrevY)
+        end
+           
+        local postRender
+        if object.computedValues.style.shaders ~= nil then
+            postRender = object.computedValues.style.shaders.postRender
+        end
+
+        if preRender ~= nil then
+            for i,v in pairs(preRender) do
+                if type(v) == "function" then
+                    v(object, i, monitor)
+                end
             end
         end
-        
-        term.setTextColor(origColor)
-        term.setBackgroundColor(prevBGColor)
-        term.setCursorPos(cursorPrevX,cursorPrevY)
     end
     
     local tempBuffer = {}
+    local orderBuffer = {}
+    -- They call me the 'I want O(1) please'
+    orderBuffer.zCache = {}
     --- Renders every Object in a given DOM; NOT LABELED FOR INDIVIDUAL SALE (and by that I mean this isn't a global, how did you get here)
     --- @param object gObject
     ---@param monitor genericMonitor
@@ -120,7 +151,7 @@
                     end
                 end
                 
-            else
+            elseif object.isDirty then
                 object.computedValues = {
                     x = object.x,
                     y = object.y,
@@ -138,10 +169,6 @@
                     end
                 end
             end
-
-        --print(object.computedValues.y)
-        --print(object.y)
-        --read()
 
         if object.colorDirty then
             object.colorDirty = false
@@ -165,24 +192,56 @@
         end
 
         if object.DOM ~= nil then
-            table.insert(tempBuffer, object)
+                if tempBuffer[object.computedValues.z] == nil and orderBuffer.zCache[object.computedValues.z] ~= true then
+                    tempBuffer[object.computedValues.z] = {}
+                    if #orderBuffer == 0 then
+                        table.insert(orderBuffer, object.computedValues.z)
+                    else
+                        if object.computedValues.z ~= nil then
+                            local low = 1
+                            local high = #orderBuffer
+                            local insertPos = #orderBuffer + 1
+                            while low <= high do
+                                local mid = math.floor((low + high) / 2)
+                                if orderBuffer[mid] < object.computedValues.z then
+                                    low = mid + 1
+                                elseif orderBuffer[mid] > object.computedValues.z then
+                                    insertPos = mid
+                                    high = mid - 1
+                                else
+                                    insertPos = mid
+                                    break
+                                end
+                            end
+                            if orderBuffer[insertPos] ~= object.computedValues.z then
+                                table.insert(orderBuffer, insertPos, object.computedValues.z)
+                                orderBuffer.zCache[object.computedValues.z] = insertPos
+                            end
+                        end
+                    end
+                end
+
+                table.insert(tempBuffer[object.computedValues.z], object)
         end
         if object.children ~= nil then
-            if object.zDirty == true then
-                object.zDirty = false
-                pcall(function () table.sort(object.children, function(a,b) return a.computedValues.z <= b.computedValues.z end)end)
-            end
             for i,v in ipairs(object.children) do
                 if v.enabled then
+                    -- If the parent is dirty then so are the children.
+                    if object.isDirty then
+                        -- I just didn't want to cascade outside the render compute cascade.
+                        v.isDirty = true
+                    end
                     renderRecursive(v, monitor)
                 end
             end
         end
+        object.isDirty = false -- We do it at the end for lazy cascading.
     end 
 
     --- Takes an object and flags it's monitors for a redraw
     --- @param object gObject
     local function flagForRedraw(object)
+        object.isDirty = true
         -- Get the DOM
         local DOM = object.DOM
         if DOM ~= nil then
@@ -224,21 +283,35 @@
                 -- Go through every DOM in this monitor, and render it's contents
                 -- We don't sort the DOMS, and it's bad practice to have multiple DOMs bound to a monitor, but you can if you want, I guess
                 for i2,v2 in ipairs(v) do
-                    if v2.colorDirty then 
+                    if v2.colorDirty then
                         v2.colorDirty = false
                         v2:allocateColors(monitor)
                     end
                     -- DOM layer
                     tempBuffer = {}
+                    
                     v2.hooks.onFrameStart()
                     renderRecursive(v2, monitor)
-                    for i,v in pairs(tempBuffer) do
-                        v:Render(monitor)
-                    end
+                    local theRemoved = {}
+                        for ia,vb in ipairs(orderBuffer) do
+                            if tempBuffer[vb] ~= nil then
+                                for _,vd in pairs(tempBuffer[vb]) do
+                                    vd:Render(monitor)
+                                end
+                            else
+                                table.insert(theRemoved, ia)
+                            end
+                            tempBuffer[vb] = {} -- Clear the frame but not the metadata
+                        end
+                        local offset = 0
+                        for _,v3 in ipairs(theRemoved) do
+                            orderBuffer.zCache[orderBuffer[v3 - offset]] = nil
+                            table.remove(orderBuffer, v3 - offset)
+                            offset = offset + 1
+                        end
                     -- Swap visibility so that we can see our drawing. We do this after rendering to reduce
                     monitor.buffers[1].setVisible(not monitor.buffers[1].isVisible())
                     monitor.buffers[2].setVisible(not monitor.buffers[2].isVisible())
-                    --print(monitor.buffers[2].isVisible())
                     v2.hooks.onFrameEnd()
                 end
 
@@ -258,8 +331,8 @@
     end
 
     local function flagZDirty(object)
-        if object.parent ~= nil then
-            object.parent.zDirty = true
+        if object.DOM ~= nil then
+            object.DOM.zDirty = true
         end
         object.zDirty = true
     end
@@ -286,18 +359,20 @@
     end
 
     --- A builder pattern to create any gObject
-    ObjectBase = {}
+    local ObjectBase = {}
 
     --- Enables the gObject for display; Could also be called show
     --- @return self
     function ObjectBase:enable()
         if not self.enabled then
-            self.enabled = true;
+            self.enabled = true
             if self.DOM ~= nil then
                 self.DOM:registerColor(self.style.bgColor, self)
                 self.DOM:registerColor(self.style.textColor, self)
             end
+            
             flagForRedraw(self)
+
             self.hooks.onEnable()
             self.hooks.onVisibilityChange(self.enabled)
         end
@@ -309,12 +384,14 @@
     --- @return self
     function ObjectBase:disable()
         if self.enabled then
-            self.enabled = false;
+            self.enabled = false
             if self.DOM ~= nil then
                 self.DOM:relinquishColor(self.style.bgColor, nil, self)
                 self.DOM:relinquishColor(self.style.textColor, nil, self)
             end
+
             flagForRedraw(self)
+
             self.hooks.onDisable()
             self.hooks.onVisibilityChange(self.enabled)
         end
@@ -337,7 +414,7 @@
     --- @param object gObject
     --- @return self
     function ObjectBase:setParent(object)
-        if type(object) == "table" and (object.type == "graphicsObject" or object.type == "DOMObject") then
+        if type(object) == "table" and (object.type == "gObject" or object.type == "DOM") then
 
 
             self.hooks.onSetParent(self, object)
@@ -346,7 +423,6 @@
                 self.DOM:relinquishColor(self.style.bgColor, nil, self)
             end
             if self.parent ~= nil then
----@diagnostic disable-next-line: param-type-mismatch
                 table.remove(table_contains(self.parent.children, self))
             end
             self.parent = object
@@ -374,7 +450,7 @@
     --- @param object gObject                                                                                                                                                                                                                                                                                                                             `ject
     --- @return self
     function ObjectBase:addChild(object)
-        if type(object) == "table" and (object.type == "graphicsObject" or object.type == "DOMObject") then
+        if type(object) == "table" and (object.type == "gObject" or object.type == "DOM") then
             self.hooks.onAddChild(self, object)
            object:setParent(self)
         end
@@ -390,7 +466,7 @@
     function ObjectBase:new()
 
         local builder = {
-            type = "graphicsObject",
+            type = "gObject",
             monitors = {},
             isBuilt = false,
             x = 1,
@@ -408,6 +484,7 @@
                 strokeColor = nil,
             },
             colorDirty = true,
+            isDirty = true,
             setup = function ()
                 
             end,
@@ -426,24 +503,60 @@
 
         bedrockCore:createHook(self, "onAddChild", "table", "table")
         bedrockCore:createHook(self, "onSetParent", "table", "table")
-        setmetatable(builder, self)
-        self.__index = self
+        setmetatable(builder, {__index = self, __name = "gObject"})
+        builder.__index = self
 
         return builder
     end
 
     function ObjectBase:setStyle(style, value)
-        if style == "textColor" then
-            return self:setTextColor(value) 
-        elseif style == "bgColor" then
-            return self:setBackgroundColor(value) 
-        elseif style == "strokeColor" then
-            error("NYI")
-        end
+        -- Basically a switch statement mom I swear.
+        local preDefStylesLUT = {
+            textColor = function ()
+                return self:setTextColor(value)
+            end,
+            bgColor = function ()
+                return self:setBackgroundColor(value)
+            end,
+            strokeColor = function ()
+                error("NYI") -- Hiiiii.
+            end,
+            x = function ()
+                self:setX(value)
+            end,
+            y = function ()
+                self:setY(value)
+            end,
+            z = function ()
+                self:setZ(value)
+            end,
+            width = function ()
+                self:setWidth(value)
+            end,
+            height = function ()
+                self:setHeight(value)
+            end,
+            visible = function ()
+                if value == true or value == "true" then
+                    self:enable()
+                else
+                    self:disable()
+                end
+            end
+        }
+
         self.style[style] = value
+
+        if preDefStylesLUT[style] ~= nil then
+            preDefStylesLUT[style]()
+        end
+
+        flagForRedraw(self)
+
         self.hooks.onStyleChange(self, style, value)
         return self, true
-    end     
+    end
+
     --- A way to set all colors of an object
     --- @alias color 
     --- | "integer" # Integer representing hexadecimal color 
@@ -486,7 +599,7 @@
         self.style.bgColor = bgColor
         self.hooks.onStyleChange(self, "bgColor", bgColor)
         if self.DOM ~= nil and self.enabled then
-            markColorDirty(self, textColor)
+            markColorDirty(self, bgColor)
             self.DOM:registerColor(self.style.bgColor, self)
         end
 
@@ -667,15 +780,27 @@
     end
 
 
+    local MaskObject = {}
+
+
+    -- It is no different an inferface but like... you can't render outside of it.
+    function MaskObject.new()
+        local builder = {}
+
+        setmetatable(builder, {__index = ObjectBase})
+        builder = ObjectBase:new()
+
+        return builder
+    end
 --[[+---------------+
     |  DOM SECTION  |
     +---------------+]]
 
 
-    DomBuilder = {}
-    function DomBuilder:new()
+    local DomBuilder = {}
+    function DomBuilder.new()
         local builder = {
-            type = "DOMObject",
+            type = "DOM",
             x = 1,
             y = 1,
             z = 0,
@@ -687,7 +812,7 @@
                 textColor = colors.packRGB(term.nativePaletteColour(colors.white)), -- Have a fallback if no one ever declares a color
                 bgColor = colors.packRGB(term.nativePaletteColour(colors.black))
             },
-            trackedMonitors = {}, 
+            trackedMonitors = {},
             colors = {},
             colorsInUse = {},
             colorDirty = true,
@@ -708,8 +833,7 @@
 
         bedrockCore:createHook(builder, "onAddChild", "table", "table"):createHook(builder, "onRemoveChild","table", "table")
 
-        setmetatable(builder, self)
-        self.__index = self
+        setmetatable(builder, {__index = DomBuilder, __name = "DOM"})
         table.insert(DOMs, builder)
         
         builder.DOM = builder
@@ -719,7 +843,7 @@
     function DomBuilder:clear()
 
         for i,v in pairs(self.trackedMonitors) do
-            for i2, col in pairs(self.colors) do 
+            for i2, col in pairs(self.colors) do
             DomBuilder:relinquishColor(col.value, monitors[v]["object"], col)
             end
         end
@@ -739,12 +863,12 @@
 
     function DomBuilder:addMonitor(monitor)
         if monitors[monitor.base.name] == nil then
-            monitors[monitor.base.name] = {} 
+            monitors[monitor.base.name] = {}
         end
         if monitors[monitor.base.name]["object"] == nil then
-            monitors[monitor.base.name]["object"] = monitor 
+            monitors[monitor.base.name]["object"] = monitor
         end
-        table.insert(self.trackedMonitors, monitor.base.name) 
+        table.insert(self.trackedMonitors, monitor.base.name)
         table.insert(monitors[monitor.base.name], self)
         monitor.redraw = true
         flagForRedraw(self)
@@ -776,6 +900,7 @@
         if type(code) == "number" then
             local renderableSubset = monitor.colorsInUse
 
+            -- Early simple lookup for if the color is already in the palette.
             for i,v in ipairs(renderableSubset) do
                 if v.preComputedValue == code or v.value == code then
                     return 2 ^ (i - 1), code, i
@@ -783,6 +908,7 @@
                 
             end
             
+            -- For colors that don't exist or failed to make it in. Find their closest match.
             table.sort(renderableSubset, function (a, b)
                 if a == nil or b == nil then
                     -- This isn't possible. It's a logic bomb. Don't worry JIT will make sure it will happen
@@ -812,15 +938,11 @@
                 print(i,v)
             end
             read()
+
             -- No color being found means there were no colors to search. We shouldn't be able to get here, hence the error.
             error("No color found for color: " .. code .. "(" .. #renderableSubset .. " Colors in the palette)")
             return nil, "No color found for color: " .. code
         else
-            print(code)
-            read()
-            for i,v in pairs(code) do
-                print(i,v)
-            end
             error("Incorrect type!")
         end
 
@@ -863,13 +985,12 @@
     --- @param color color
     ---@param instances integer # The amount of instances to relinquish
     function DomBuilder:relinquishColor(color, monitor, colorObj)
-        if colorObj.type == "DOMObject" or colorObj.type == "graphicsObject" then
+        if colorObj.type == "DOM" or colorObj.type == "gObject" then
             colorObj = {
                 instances = 1,
                 size = colorObj.w * colorObj.h
             }
         end
-        instances = instances or 1
         -- Is this a result of technical debt? ...Yes :(
             -- Well okay not that much tech debt. I just added the monitor param, and the instances param. 
         local _monitors = monitor ~= nil and {monitor} or {}
@@ -951,6 +1072,7 @@
                 table.insert(renderableSubset,v)
                 end
             end
+            
             table.sort(renderableSubset, function (a, b)
                 -- If the instances are equal, then fallback
                 if a.instances + a.size ~= b.instances + b.size then
@@ -1016,7 +1138,7 @@
 ----| LIFE CYCLE SECTION |
 -------------------------+]]
 ---
-    local function init(modules, core) 
+    local function init(modules, core)
         -- monitors being resized means instant redraw flag. Mostly because it's scary (also they clear themselves on resize)
         bedrockCore = core
         bedrockCore:registerEvent("term_resize", function() handleMonitorResize("term") end)
@@ -1034,12 +1156,6 @@
     end
     
     local function main(deltaTime)
-        if type(renderFrame) == "table" then
-            for i,v in pairs(renderFrame) do
-                print(i,v)
-            end
-            read()
-        end
         renderFrame()
     end
 
@@ -1072,6 +1188,13 @@
                 local idx = 2^(i2-1)
                 monitor.functions.setPaletteColour(idx, colors.packRGB(term.nativePaletteColor(idx)))
             end
+
+            for i,v in pairs(monitor.buffers) do
+                v.clear()
+                v.setVisible(false)
+                monitor.buffers = nil
+            end
+            term.setCursorPos(1,1)
         end
     end
 
@@ -1100,13 +1223,13 @@
 
                 }
             },
-            version = "0.0.0",
+            version = "0.3.1", -- Huh actually semVering for once. God
             priority = 1,
         },
         domBuilder = DomBuilder,
         objectBase = ObjectBase,
-        RenderFrame = renderFrame
-
+        RenderFrame = renderFrame,
+        maskObject = MaskObject,
     }
     return BedrockGraphics
 

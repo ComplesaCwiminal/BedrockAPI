@@ -69,7 +69,7 @@ On the other hand, you can get to know me personally, and get a user on our serv
 
 - [ ] Finish this wiki page
 
-- [ ] Complete the core reference system.
+- [X] Complete the core reference system.
 
 - [X] Get a good nights rest.
 

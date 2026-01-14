@@ -17,8 +17,10 @@ local BedrockCore = {}
 
 local firstLoad = _G.BedrockCore == nil
 
+local debugLib = debug
+
 if not firstLoad then
-    table.insert(_G.BedrockCore.users, debug.getinfo(3, "f").func)
+    table.insert(_G.BedrockCore.users, debugLib.getinfo(3, "f").func)
     if _G.BedrockCore.enforceSingleness then
         _G.BedrockCore = {}
         _G.BedrockCore.enforceSingleness = true
@@ -38,8 +40,12 @@ local trustedCaller = math.random(1, 0xFFFFFFFFFFFFFF)
 
 local regenerateCoreReference = function ()
     -- This is overwritten near the end. This declaration is so lua doesn't complain we don't have a function with this name
-    error("Illegal State! Function called before program run?")
+    error("Illegal State! Function called before program run?", 2)
 end
+local coreReference = function ()
+    error("Illegal State! Function called before program run?", 2)
+end
+
 local registeredCores = {}
 
 CoreBuilder = {}
@@ -53,6 +59,7 @@ local shared = {
 }
 
 local nameIDpair = {}
+
 local function addSharedValue(Value, Name)
 
         if nameIDpair[Name] ~= nil and (Name ~= "" or Name ~= nil) then
@@ -175,7 +182,7 @@ local function addSharedValue(Value, Name)
     --- Assumedly checks deprecations. Doesn't work...
     local function checkDeprecated()
         -- It's gotta be one of them! Right?
-        local f = debug.getinfo(4) or debug.getinfo(3) or debug.getinfo(2)
+        local f = debugLib.getinfo(4) or debugLib.getinfo(3) or debugLib.getinfo(2)
         
         -- Well... Crap.
         if f == nil then
@@ -193,7 +200,7 @@ local function addSharedValue(Value, Name)
         end
     end
         -- If a CraftOS-PC debugger is attached you aren't allowed to set hooks. 
-        --pcall(debug.sethook, checkDeprecated, "c")
+        --pcall(debugLib.sethook, checkDeprecated, "c")
 
     function CoreBuilder:deprecateFunction(Func, ExtraInfo, Severity)
         local deprecationBody = {
@@ -201,7 +208,7 @@ local function addSharedValue(Value, Name)
             extraInfo = ExtraInfo,
             severity = Severity
         }
-        deprecationBody.funcDetails = debug.getinfo(Func)
+        deprecationBody.funcDetails = debugLib.getinfo(Func)
         
         table.insert(deprecatedFunctions, deprecationBody)
         return self
@@ -317,7 +324,7 @@ local function APICleanup(ID, disallowShutdown)
             trustedCaller = nil
             _G.BedrockCore = nil
             registeredCores = {}
-            pcall(debug.sethook,nil, "c")
+            pcall(debugLib.sethook,nil, "c")
         else
             trustedCaller = ID
         end
@@ -471,7 +478,6 @@ local function resolveDependencies(core, module)
         if module.moduleDefinition.dependencies then
             -- If so, then check which types.
             
-
             for _,v2 in ipairs(module.moduleDefinition.dependencies.requirements) do 
                 
                 assert(coreModules[v2.moduleName] ~= nil, "Module " .. module.moduleDefinition.moduleName .. " is missing dependency " .. v2.moduleName .. "!")
@@ -609,7 +615,6 @@ function CoreBuilder:new()
         numTimers = 0,
         threads = {},
         isNew = true
-        
     }
 
     setmetatable(builder, {__index = self})
@@ -678,6 +683,16 @@ function CoreBuilder:addModule(module)
         if self.modules == nil then
             self.modules = {}
         end
+
+        if self.knownModules == nil then
+            self.knownModules = {}
+        end
+
+        if(self.knownModules[module.moduleDefinition.moduleName] ~= nil) then
+            error("Module already registered?")
+        end
+
+        self.knownModules[module.moduleDefinition.moduleName] = true;
         table.insert(self.modules, module)
 
     if self.isBuilt then
@@ -747,19 +762,24 @@ end
 function CoreBuilder:build()
     if not self.isBuilt then
         self.hooks.onBuild(self.modules)
+
         self.DeltaTime = 0
         self.timeOfLastFrame = os.epoch("utc")
 
         table.insert(registeredCores, self)
+
         for _,v in ipairs(self.modules) do
+
             local givenModules = resolveDependencies(self, v)
             -- check if this module has deps
 
             -- Hand over only our functions and the needed modules
             v.moduleDefinition.Init(givenModules, self)
+
             for i2,v2 in pairs(v.moduleDefinition.events) do
                 self:registerEvent(v2.eventName, v2.eventFunction)
             end
+
             -- start a timer if a time slice is declared
             if v.moduleDefinition.runRate and v.moduleDefinition.runRate > 0 then
                 local runFunc = function () end
@@ -871,7 +891,7 @@ local function update(nonce)
                         table.insert(coremains, function ()
                             local success, message = pcall(v2.moduleDefinition.Main, v.DeltaTime)
                             if not success then
-                                local results = v.hooks.onModuleError(v.modules, v2, message, debug.getinfo(2, "fSl"))
+                                local results = v.hooks.onModuleError(v.modules, v2, message, debugLib.getinfo(2, "fSl"))
                                 if not results then
                                     error(message ~= "" and (message or "Error message is nil?") or "Empty string as error message?", 3)
                                 end
@@ -931,7 +951,7 @@ local function tick()
 end
 
 -- A core reference is just a copy of the core so overrides don't hamper function for others.
-local function coreReference()
+coreReference = function ()
     local table = {}
     for i,v in pairs(BedrockCore) do
         table[i] = v
@@ -939,6 +959,8 @@ local function coreReference()
 
     table.id = nil
     table.hooks = nil
+    table.modules = {}
+    table.knownModules = {}
 
     return table
 end
@@ -973,7 +995,7 @@ local function regenerateCoreReference()
             },
 
             -- only core gets shared. (If you follow best practice) only it's allowed to inherently hold random info
-            version = "0.2.0+requiresVersionCheck" -- I don't know how to version. So I'll figure this out on release. Nobody else is here to judge anyway.
+            version = "0.3.0+requiresVersionCheck" -- I don't know how to version. So I'll figure this out on release. Nobody else is here to judge anyway.
         },
         coreBuilder = CoreBuilder,
         Tick = tick,
@@ -1056,8 +1078,8 @@ local function regenerateCoreReference()
     end
 end
 
-
 regenerateCoreReference()
+
 return BedrockCore
 
 -- It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.It hurts.

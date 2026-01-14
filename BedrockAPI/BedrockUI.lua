@@ -387,7 +387,7 @@ local focused = nil
 
         if type(mouseButtonsDown[button]) == "table" then
             local buttonObj = mouseButtonsDown[button]
-            buttonObj:fireEvent(navTypesLUT.drag, button, x - buttonObj.absolutes.x + 2, y - buttonObj.absolutes.y + 2)
+            buttonObj:fireEvent(navTypesLUT.drag, button, x - buttonObj.absolutes.x + 2, y - buttonObj.absolutes.y + 2, x, y)
         end
         -- Click and drag support? Only if you want that.
     end
@@ -478,13 +478,14 @@ local focused = nil
             local num, unit, err = givenNum:match("^(-?%d+%.?%d*)%s*(.*)$")
  
             if err then
-                return "unit parsing failed!", false
+                return givenNum, false
             end
 
             num = tonumber(num)
 
+            -- This is another type of parsing failure.
             if type(num) ~= "number" then
-                return givenNum
+                return givenNum, false
             end
 
             unit = string.lower(unit)
@@ -557,8 +558,8 @@ local focused = nil
                                     return computeNumericalUnit(object, num .. "vh")
                                 end
                             end
-                            -- Okay so we have NOTHING. Absolutely nothing.
-                            return num, false
+                            -- Okay so we have NOTHING. Absolutely nothing. Parsing failure
+                            return givenNum, false
                         end
                     else
                         return math.floor((num * (refObject.computedStyle[valueName] * 0.01)) + .5)
@@ -575,7 +576,7 @@ local focused = nil
             end
         end
 
-        return givenNum
+        return givenNum, false
     end
 
     -- We internally need our colors to be a number. eg. 0x0f2fac
@@ -757,9 +758,13 @@ local focused = nil
                             result = v
                         end
                     end
-
+                local prev = self.computedStyle[i]
+                local success = pcall(self.gObject.setStyle, self.gObject, i, result)
+                if(success) then
                 self.computedStyle[i] = result
-                self.gObject:setStyle(i, result)
+                else
+                    pcall(self.gObject.setStyle, self.gObject, i, prev)
+                end
             end
         else
             if self.style[style] == nil then
@@ -777,8 +782,13 @@ local focused = nil
                     end
                 end
 
+            local prev = self.computedStyle[style]
+            local success = pcall(self.gObject.setStyle, self.gObject, style, result)
+            if(success) then
             self.computedStyle[style] = result
-            self.gObject:setStyle(style, result)
+            else
+                pcall(self.gObject.setStyle, self.gObject, style, prev)
+            end
         end
 
         if self.parent ~= nil then

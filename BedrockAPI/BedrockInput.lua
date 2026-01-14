@@ -591,6 +591,144 @@ local function onKeyUp(_ev, key)
     handleKeyEvents(keyDescriptor)
 end
 
+--[[+----------------------+
+----| FILE PARSING SECTION |
+---------------------------+]]
+
+-- Probably dangerous but whatever
+
+--- Parses arbitrary bytes into your expected type.
+local function parseType(value, type)
+    -- My favorite pattern. The switchboard
+        -- Yes I made the name myself, but fuck off.
+    local states = {
+        string = function (val)
+            return tostring(val)
+        end,
+        int = function (val)
+            -- TODO
+        end,
+        -- Little endian
+        l_int = function (val)
+            -- Also TODO    
+        end,
+        -- Amogus.
+    }
+
+    return states[type](value)
+end
+
+    -- Top level requirements for a format to be valid
+    local formatRequirements = {
+        defaultBytes = "number",
+        defaultFieldFormat = "table",
+    }
+
+--- Takes a file and parses it's header from a given format
+local function parseFileHeader(file, format)
+    -- If it's a file path open it is a file HANDLE
+    if type(file) == "string" then
+        file = fs.open(file, 'rb')
+    end
+
+    for i,v in pairs(formatRequirements) do
+        if type(format[i]) ~= v then
+            error("Format's " .. i .. " is missing or of the wrong type!")
+        end
+    end
+    -- Seek to the start position to avoid any messes on the file handle.
+    file.seek("set", format.startPosition or 1)
+    -- This is where we'll save our collected info
+    local headerInfo = {}
+    local prev = nil
+    local zeroOffset = 0
+
+    if(type(format.ordered) == "table") then
+        for i,v in ipairs(format.ordered) do
+            if type(v.onPreParse) == "function" then
+                -- Give it the current one, the last one, and it's parsed value
+                
+                v.onPreParse(format.ordered[i], prev, headerInfo[prev.field])
+            end
+
+            -- uhhhh this is self explanatory tbh
+            local width = v.width or format.defaultBytes
+            local expectedType = v.type or "string"
+
+            -- Store a simple reference if you shouldn't store the body
+            if v.storeBody == nil or v.storeBody then
+                -- Parse the type. Make it into something lua understands. 
+                headerInfo[v.field] = parseType(file.read(width), expectedType)
+            else
+                -- You know I have no idea if this can be equalitied.
+                -- Good luck? Not my job
+                headerInfo[v.field] = {
+                    start = zeroOffset
+                }
+                file.seek("cur", width) -- Seek past it
+            end
+
+            if type(v.onLocated) == "function" then
+                v.onLocated(headerInfo[v.field], format.ordered)
+            end
+
+            -- In the ordered section expected results mean they are required.
+            -- Outside not so much. It depends
+            if v.expectedResult ~= nil then
+                if headerInfo[v.field] ~= v.expectedResult then
+                    error("Header is corrupted! Section: " .. v.field .. " expected " .. v.expectedResult .. ", but got " .. headerInfo[v.field])
+                end
+
+            end
+
+            prev = v
+            zeroOffset = file.seek("cur", 0) -- Set it to our exact file seek position
+
+            -- Explode your balls. Right now.
+                -- What? Nooo. Duudee.
+        end
+    end
+
+    local finalFieldsFound = false
+
+    local optionals = {}
+    local requireds = {
+        fields = {},
+        founds = {}, -- The same keys as fields but just true or false. Used to collate every item we've found
+        requirementsLeft = 0,
+    }
+    
+    -- Convert the stuff to hash maps for speed.
+        -- It's technically not a hash map. I don't have hashing.
+    for i,v in ipairs(format.unordered.optional) do
+        if v.expectedResult ~= nil then
+            optionals[v.expectedResult] = v
+        end
+    end
+
+    -- Validated after the final field is found and completed. However it can replace the final field if none exists.
+    for i,v in ipairs(format.unordered.required) do
+        if v.expectedResult ~= nil then
+            -- For safe keeping... I think
+            requireds.fields[v.expectedResult] = v
+            requireds.founds[v.expectedResult] = false
+
+            -- Who didn't add += to this stupid language
+            requireds.requirementsLeft = requireds.requirementsLeft + 1
+        end
+    end
+
+
+    -- If final fields do not exist, continue when the required unordereds are found
+    while not ((finalFieldsFound) or (type(format.finalFields) ~= "table" and requireds.requirementsLeft <= 0)) do
+        -- uhhhhh
+            -- DIE DIE DIE DIE DIE DIE DIE DIE DIE
+                -- AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    end
+
+
+    -- I'm a consumate professional, what do you mean?
+end
 
 --[[+--------------------+
 ----| LIFE CYCLE SECTION |
@@ -676,7 +814,7 @@ BedrockInput = {
                 eventFunction = onPeripheralDetach
             },
         },
-        version = "0.0.0"
+        version = "0.1.0"
     },
     keysHeld = _keysHeld,
     RegisterKeyEvent = registerKeyEvent,
@@ -688,6 +826,8 @@ BedrockInput = {
     GetPeripheralFromText = getPeripheralFromText,
     GetGenericDisplayPeripheral = getGenericDisplayPeripheral,
     CreateKeyDescriptor = createKeyDescriptor,
+    ParseFileHeader = parseFileHeader,
+    peripheralManager = _G.peripheralManager,
 }
 
 return BedrockInput

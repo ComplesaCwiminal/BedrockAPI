@@ -2,12 +2,15 @@
     |                     UTILS MODULE                          |
     |                    +------------+                         |
     |   What this module handles: Misc. Utilities for general   |
-    |                        uses                               |
+    |                          uses,                            |
     | This module provides a bunch of utilities that other      |
     | modules tend to need. These'll likely be found in other   |
     | util libraries, but these are the defaults that modules   |
     | should use.                                               |
     +-----------------------------------------------------------+]]
+
+    -- Define it so static code analyzers see it as useable.
+    local BedrockUtils = {}
 
     -- Start High
     local maxLayers = 25
@@ -159,31 +162,6 @@
     local function findTableValue(table, x, recurse)
         return findTableValueRecursive(table, x, recurse)
     end
-
-    local function inheritFromInstance(class, obj, parent)
-        
-        -- Instantiate our parent. Ideally with new(), but just duplicate if impossible.
-        local success, parentValues = pcall(function () return parent:new() end)
-
-        if success then
-            -- Deep copy the class to avoid tampering mishaps.
-            local classCopy = copyTable(class, true)
-
-            classCopy.__index = parentValues
-            setmetatable(classCopy, {__index = parentValues})
-
-            -- Allow access to it without the metatable. If used correctly, it should act like `super`.
-            obj.__index = classCopy
-            setmetatable(obj, {__index = classCopy})
-
-
-            -- Hopefully you have no values, but if you do, then we just return them.
-            return true, obj, parentValues
-        end
-        return false
-    end
-
-    local BedrockUtils = {}
 
         BedrockUtils = {
         type = "BedrockModule",

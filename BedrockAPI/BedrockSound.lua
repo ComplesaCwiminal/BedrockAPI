@@ -1,176 +1,286 @@
+--[[+----------------------------------------------------------+
+    |                     SOUND MODULE                         |
+    |                    +------------+                        |
+    | What this module handles: Sound, audio buffer/tracks,    | 
+    | playback, exception handling, mixing, niceties           |
+    |                                                          |
+    |                      Description:                        |
+    |  This module is designed to handle all raw audio data    |
+    |  and details relating to it's dispatch. It's not perfect | 
+    |   but it SHOULD be enough to not need to think to hard   | 
+    |                       about it.                          |
+    +----------------------------------------------------------+
+---------------------------------------------------------------]]
 
 local BedrockSound = {}
----@diagnostic disable: undefined-global, undefined-field
-local audioBuffer = {
-    
+
+local state = {
+    playback = "stopped"
 }
 
-local tempo = 100
-local bufferSize = 128
+local peripheralManager = {}
 
+local speakerObjs = {}
+local speakers = {}
+-- Needed to track the write and playheads. The buffers are circular
+local speakerMetas = {}
 
-local trackBuilder = {}
+local function addSpeaker(order)
+    local trueOrder = order <= #speakerMetas and order or #speakerMetas + 1
+    trueOrder = trueOrder > 0 and trueOrder or 1
 
-function trackBuilder.new(Instrument, Volume, Pitch)
-    local track = {}
-    track.instance = {    
-        position = 1,
-        queuedNotes = 0,
-        volume = Volume or 1, -- track master volume
-        pitch = Pitch or 1, -- pitch shifter
-        instrument = Instrument or "error",
-        tracks = {}, -- child tracks, 
-        notes = {}
-    }
-    
-    track.instance._volume = Volume
-    track.instance._pitch = Pitch
+    local audioMetaBase = {pcm = {}, notes = {}}
+    table.insert(speakers, order, {pcm = {}, notes = {}})
+    table.insert(speakerMetas, order, audioMetaBase)
+end
+local function removeSpeaker(id)
+    table.remove(speakers, id)
+    table.remove(speakerMetas, id)
+    table.remove(speakerObjs, id)
+end
 
+local trackBase = {}
 
-    local self = setmetatable(track, trackBuilder)
-    self.__index = self
-    
-    function track:addNote(Pitch, Volume, Length)
-        local addPos = #self.instance.notes + 1
-        if addPos > bufferSize then
-            addPos = 1
-        end
-
-        local note = {
-            pitch = Pitch or 0,
-            volume = Volume or 1,
-            length = Length or (1/4), 
+local function getTrack(speakerID, tType, trackID)
+    if speakers[speakerID] ~= nil and speakers[speakerID][tType] ~= nil and speakers[speakerID][tType][trackID] ~= nil then
+        local trackObj = {
+            trackID = trackID,
+            position = speakers[speakerID][tType],
+            metaData = speakerMetas[speakerID][tType][trackID],
+            data = speakers[speakerID][tType][trackID],
         }
-        self.instance.notes[addPos] = note
-        self.instance.queuedNotes = self.instance.queuedNotes + 1 
-        return self
-    end
+        setmetatable(trackObj, {__index = trackBase})
 
-    function track:addTrack(track)
-        track.instance._volume = track.instance.volume + self.instance._volume
-        track.instance._pitch = track.instance.pitch + self.instance._pitch
-        table.insert(self.instance.tracks, track)
-        return self
+        return true, trackObj
     end
+    return false, "Track does not exist"
+end
+--- Creates a track and inserts it. Contains no audio data by default
+local function createTrack(speakerID, tType, order)
 
-    function track:addSpeaker(speaker)
-        
+    table.insert(speakers[speakerID][tType], order, {})
+    -- volume 1 is 100%
+        -- If I learn fast fourier transforms I could also do piiiiitch~
+    table.insert(speakerMetas[speakerID][tType], order, {playhead = 1, writehead = 1, volume = 1})
+
+
+    local trueOrder = order <= #speakerMetas and order or #speakerMetas + 1
+    trueOrder = trueOrder > 0 and trueOrder or 1
+
+    return getTrack(speakerID, tType, trueOrder)
+end
+
+--- A quick helper for the road 
+--- Only for use in prewriting
+local function calculateFilled(readH, writeH)
+    writeH = writeH + 1
+    if writeH > BedrockSound.bufferSize then
+        writeH = 1
     end
+    return readH == writeH
+end
+local function pushByte(track, byte)
+    if type(byte) == "number" then
+        track.data[track.metaData.writehead] = byte
+        track.metaData.writehead = track.metaData.writehead + 1
 
-    function track:playNote(speaker)
-        local track = self.instance
-        if track.queuedNotes >= 1 then
-            local note = track.notes[track.position]
-            -- -1 is a rest note. Cope ong
-            if note.pitch ~= -1 then
-                local _trackVol = note.volume
-                if track._volume ~= nil then
-                    _trackVol = note.volume + track._volume
-                else 
-                    _trackVol = note.volume + track.volume
-                end
-                local _trackPitch = note.pitch
-                if track._pitch ~= nil then
-                    _trackVol = note.pitch + track._pitch
-                else 
-                    _trackVol = note.pitch + track._pitch
-                end
-                
-                speaker.speaker.playNote(track.instrument, note.volume * track.volume, note.pitch * track.pitch)
-                os.sleep((60/tempo) * note.length)
-            end
-            track.position = track.position + 1
-            track.queuedNotes = self.instance.queuedNotes - 1
-            if track.position > bufferSize then
-                track.position = 1
-            end 
-        else 
-            error("Audio buffer is empty!")
+        -- Basic wraparound. Could be more concise, but fuck off.
+        if track.metaData.writehead > BedrockSound.bufferSize then
+            track.metaData.writehead = 1
         end
-        return self
-    end
-
-    function track:build()
-        table.insert(audioBuffer, track)
-        return track
-    end
-
-    return track
-end
-
-local function playNote(speaker)
-    local noteFunc = {}
-    for _,v in pairs(audioBuffer) do
-        table.insert(noteFunc, function ()
-            v:playNote(speaker)
-        end)
-    end
-
-    parallel.waitForAll(table.unpack(noteFunc))
-end
-
-local function changeTempo(newTempo)
-    tempo = newTempo
-end
-
-local function movePlayhead(newPos)
-    for _,v in pairs(audioBuffer) do
-        v.position = newPos
+    else
+        -- Notice how this doesn't say 8 bit?
+            -- I'm going to hate myself
+        error("Track data must be numerical PCM")
     end
 end
 
--- ISTFG DO NOT RUN THIS FUNCTION WITHOUT IT USING PARALLEL, IT YIELDS FREQUENTLY, BUT IT'LL LOCK YOU UP FOR THE SONGS DURATION.
-local function playBuffered(speaker)
-    local trackThreads = {}
-    for i,v in pairs(audioBuffer) do
-            table.insert(trackThreads,function()
-            while v.instance.queuedNotes >= 1 do
-                v:playNote(speaker)
+-- How do tracks deal with wraparound data? Do they tell you before wraparound?
+function trackBase:pushData(data, overwrite)
+    -- If it's not a table treat it as if it were a byte
+    if type(data) == "table" then
+        -- Push the span of bytes or whatever else tbh. That's for our preprocessor to hate us for.
+        for key, value in ipairs(data) do
+            -- if after pushing they're equal. We can't add any more
+            if calculateFilled(self.metaData.playhead, self.metaData.writehead) and not overwrite then
+                return false, key, value -- Return false, and the key that failed to add.
             end
-        end)
+
+            pushByte(self, value)
+        end
+    else        -- if after pushing they're equal. We can't add any more
+        if calculateFilled(self.metaData.playhead, self.metaData.writehead) and not overwrite then
+            return false, nil, data -- Return false, and the key that failed to add.
+        end
+        
+        pushByte(self, data)
     end
-    parallel.waitForAll(table.unpack(trackThreads))
+    
     return true
 end
 
-local function pauseBuffered()
 
+--- Get your current position in write track
+function trackBase:getWritePos()
+    return self.metaData.writehead
 end
 
-local function stopBuffered()
-
+--- Get your current position in play track
+function trackBase:getPlayPos()
+    return self.metaData.playhead
 end
 
-local function init()
-    
+function trackBase:seekBufferPlayhead(position)
+end
+
+function trackBase:seekBufferWritehead(position)
+end
+
+function trackBase:clearBuffer()
+        self.position[self.trackID] = {}
+        
+        self.metaData.playhead = 1
+        self.metaData.writehead = 1
+end
+
+local function Play()
+    state.playback = "playing"
+end
+
+local function Pause()
+    state.playback = "paused"
+    for i,v in pairs(speakerObjs) do
+        v.base.functions.stop()
+    end
+end
+
+local function Stop()
+    if state.playback ~= "stopped" then
+        for i,v in pairs(speakerObjs) do
+            v.base.functions.stop()
+        end
+
+        for i,types in ipairs(speakerMetas) do
+            for i2,v2 in pairs(types) do
+                for i3,v3 in pairs(v2) do
+                    v3.playhead = 1
+                end
+            end
+        end
+    end
+
+    state.playback = "stopped"
+end
+
+--- Inits a new speaker to be hotplug compatible
+local function initSpeaker(id, speaker)
+        addSpeaker(id)
+        table.insert(speakerObjs, id, speaker)
+
+        local curIter = id
+
+        speaker.base.hooks.onDisconnect.addHook(function ()
+            removeSpeaker(curIter)
+        end)
+end
+
+--- This is the summer. After this you should normalize
+local function mixTrackSample(speaker, tType, sample)
+    if speakers[speaker] ~= nil and speakers[speaker][tType] ~= nil then
+        local sum = 0
+        for i,v in ipairs(speakers[speaker][tType]) do
+            sum = sum + (v[sample] or 0)
+        end
+        -- They are uncorrelated generally so this is the best approach
+        sum = sum / math.sqrt(#speakers[speaker][tType])
+        return sum -- Make sure to clamp these before you actually use them. Not possible here because this is typically step one of many
+    end
+    return false, "Cannot find samples"
+end
+
+-- Initialize our hooks and set up hotplug stuff
+local function init(modules, core)
+    core:createHook(BedrockSound, "OnPlaybackError") -- We'll use this in playback errors. It'll pause if it errors.
+    peripheralManager = modules.Input.peripheralManager
+
+    for i,v in pairs(peripheralManager.connectedDevices) do
+        print(i,v)
+    end
+
+    local iter = 1
+    for i,v in pairs(peripheralManager.connectedDevices.speaker) do
+        initSpeaker(iter, v)
+        iter = iter + 1
+    end
+    modules.Input.hooks.onPeripheralConnect.addHook(function (device)
+        if(device.base.type == "speaker") then
+            initSpeaker(nil, device)
+        end
+    end)
 end
 
 local function main()
+        while state.playback == "playing" do
+            local threads = {}
+            for i,v in ipairs(speakerObjs) do
+                table.insert(threads, function ()
+                local chunk = {}
+                
+                local samplePos = 0
+                
+                for i2 = 0, BedrockSound.bufferSize do
+                    samplePos = speakerMetas[i]["pcm"].playhead + i2
+                    samplePos = samplePos > BedrockSound.bufferSize and samplePos - BedrockSound.bufferSize or samplePos
+                    
+                    -- Implement downmixing later
+                    chunk[i2] = math.min(math.max(mixTrackSample(i, "pcm", samplePos), -128), 127)
+                end
+                speakerMetas[i]["pcm"].playhead = speakerMetas[i]["pcm"].playhead + bufferSize
+                speakerMetas[i]["pcm"].playhead = speakerMetas[i]["pcm"].playhead > BedrockSound.bufferSize and speakerMetas[i]["pcm"].playhead - BedrockSound.bufferSize or speakerMetas[i]["pcm"].playhead
 
+                while not v.base.functions.playAudio(chunk) do
+                    os.pullEvent("speaker_audio_empty")
+                end
+                end)
+            end
+
+            parallel.waitForAll(table.unpack(threads))
+        end
 end
 
 local function cleanup()
     
-end 
+end
+
 
 BedrockSound = {
     type = "BedrockModule",
-    moduleAttributes = {
-        name = "Sound",
-        Init = init, -- 
+    moduleDefinition = {
+        moduleName = "Sound",
+        Init = init,
         Main = main,
         Cleanup = cleanup,
+        events = {},
+            dependencies = {
+                requirements = {
+                    {moduleName = "Core", version = "*"},
+                    {moduleName = "Input", version = "*"}
+                },
+                optional = {
 
-        events = {
-            
-        }
+                },
+                conflicts = {
+
+                }
+            },
     },
-    AudioBuffer = audioBuffer,
-    PlayBuffered = playBuffered,
-    MovePlayhead = movePlayhead,
-    PlayNote = playNote,
-    
-    TrackBuilder = trackBuilder,
-}   
+    bufferSize = 1024 * 32, -- A valid default.
+    bitWidth = 8, -- Default is 8 to match output. It'll get downmixed if higher though.
+    GetTrack = getTrack,
+    CreateTrack = createTrack,
+    Play = Play,
+    Pause = Pause,
+    Stop = Stop,
+}
 
 return BedrockSound

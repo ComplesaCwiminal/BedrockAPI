@@ -480,9 +480,9 @@ local function parseLookup(_ev, sender, message, protocol)
                         os.sleep(0)
                     end
 
-                        local ackmsg = "ACK" .. tostring(ecc.random.random())
-                        ackmsg = string.sub(ackmsg, 1, math.floor(#ackmsg * (generateNonce() / (2^maxWidth)))) -- The nonce is just so it's harder to recognize data patterns. Completely irrelevent but it's so cheap and I love it so I wanted to use it again. (but I can't in real sec so it gets odd jobs.)
-                        sendMessage(sender, ackmsg, endpointsLookup.messageACKProtocol)
+                    local ackmsg = "ACK" .. tostring(ecc.random.random())
+                    ackmsg = string.sub(ackmsg, 1, math.floor(#ackmsg * (generateNonce() / (2^maxWidth)))) -- The nonce is just so it's harder to recognize data patterns. Completely irrelevent but it's so cheap and I love it so I wanted to use it again. (but I can't in real sec so it gets odd jobs.)
+                    sendMessage(sender, ackmsg, endpointsLookup.messageACKProtocol)
 
                     if not didAction and not tableifiedMessage.isHeartbeat and not onLockdown then
                         -- Even an error is an acknowledgement of a kind.
@@ -574,47 +574,7 @@ local function parseLookup(_ev, sender, message, protocol)
         rednet.send(sender, generateError(101, true))
     end
 end
- 
-local monitor = peripheral.find("monitor")
--- Pretty but not required.
-
--- We have a better tool for making graphics (Bedrock Graphics), but I'm too lazy rn
-local function decorativeSubservice()
-    local lastTerm = term.current()
-    term.redirect(monitor)
-    term.clear()
-    print()
-    local numClients = 0
-    for i,v in pairs(clients) do
-        print(string.format("%s: %s, (Authed? %s)", i, v.sessionID, v.isAuthenticated))
-        numClients = numClients + 1
-    end
-    term.setCursorPos(1,1)
-    print("Connected Clients: ", numClients)
-    term.redirect(lastTerm)
-end
-
-local repaintInterval = 5
-local timeLeft = repaintInterval
-local repaintManager
-local repaintTimer = nil
-repaintManager = function()
-    local monX, monY = monitor.getSize()
-
-    if timeLeft <= 0 then
-        timeLeft = repaintInterval
-        decorativeSubservice()
-    end
-
-    monitor.setCursorPos(1, monY)
-    monitor.clearLine()
-    monitor.write("Refresh in: " .. timeLeft)
-
-    timeLeft = timeLeft - 1
-
-    _, repaintTimer = coreInstance:queueTimer(1000, repaintManager)
-end
-
+  
 local spamManager
 local trustManager
 local spamTimer = nil
@@ -622,7 +582,7 @@ local spamTimer = nil
 -- TODO add drift to the calc for better precision
 -- They call me cloudflare DDOS protection. No they don't
 spamManager = function (drift)
-    -- We can only sample a ms precision but if you want to allow over 1000 messages per minute then this allows that.
+    -- We can only sample at ms precision but if you want to allow over 1000 messages per minute then this allows that.
     local decrementAmount = BedrockNetworkServer.maxMessagesPerMin < 1000 and 1 or math.floor(BedrockNetworkServer.maxMessagesPerMin / 1000)
     if messagesGotten - decrementAmount > 0 then
         messagesGotten = messagesGotten - decrementAmount

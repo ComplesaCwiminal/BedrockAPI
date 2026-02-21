@@ -376,7 +376,7 @@ local function run()
             else
                 print(serverKey, contents.pubKey, challenge.signature)
 
-                if not ecc.verify(serverKey, contents.pubKey, challenge.signature) then
+                if not ecc.verify(serverKey, challenge.body, challenge.signature) then
                     if not BedrockNetworkDevice.onKeyFailure then
                         error("Server has invalid signature!", 0)
                     else

@@ -35,13 +35,13 @@ COMING SOON!
 
 #### Conventional usage method
 
- [Create Your First Project](Guides.Your-First-Project)
+ [Create Your First Project](https://github.com/ComplesaCwiminal/BedrockAPI/wiki/Guides.Your-First-Project)
 
 -----
 
 ### Overviews
 
-- [Module Overview](Modules.Module-Overview)
+- [Module Overview](https://github.com/ComplesaCwiminal/BedrockAPI/wiki/Modules.Module-Overview)
 
 ### Modules  
 

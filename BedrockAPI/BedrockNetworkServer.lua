@@ -144,7 +144,7 @@ local function verifyMessage(sender, message)
     
     -- We allow slight desync, but not much
     if (clients[sender].lastMessageiter ~= nil and (pl.iter <= clients[sender].lastMessageiter - iteratorWindow or pl.iter >= clients[sender].lastMessageiter + iteratorWindow or clients[sender].seenIters[pl.iter] ~= nil)) then
-        print("Nonce is not correct and/or is desynced. " .. clients[sender].lastMessageiter .. " / " .. pl.iter) -- The ever difficult dance of telling people what they need to know but not too much!
+        print("Nonce is not correct and/or is desynced. " .. clients[sender].lastMessageiter .. " / " .. pl.iter .. " (" .. sender .. ")") -- The ever difficult dance of telling people what they need to know but not too much!
         return
     end
 
@@ -484,12 +484,12 @@ local function parseLookup(_ev, sender, message, protocol)
                     ackmsg = string.sub(ackmsg, 1, math.floor(#ackmsg * (generateNonce() / (2^maxWidth)))) -- The nonce is just so it's harder to recognize data patterns. Completely irrelevent but it's so cheap and I love it so I wanted to use it again. (but I can't in real sec so it gets odd jobs.)
                     sendMessage(sender, ackmsg, endpointsLookup.messageACKProtocol)
 
-                    if not didAction and not tableifiedMessage.isHeartbeat and not onLockdown then
-                        -- Even an error is an acknowledgement of a kind.
-                        rednet.send(sender, generateError(009, true), endpointsLookup.messageACKProtocol)
-                    end
                     if onLockdown then
                         sendMessage(sender, generateError(101, true), endpointsLookup.encryptedMessageProtocol) -- Let them know so they don't try anything.
+                    elseif not didAction and not tableifiedMessage.isHeartbeat then
+                        
+                        -- Even an error is an acknowledgement of a kind.
+                        rednet.send(sender, generateError(009, true), endpointsLookup.messageACKProtocol)
                     end
                 else
                     print("Client is either not authed, or hasn't sent initial intent!" .. sender)

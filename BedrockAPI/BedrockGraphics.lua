@@ -48,24 +48,33 @@
     --- @param object gObject
     ---@param monitor genericMonitor
     local defaultMaterial = function (object, monitor)
-
         local preRender
+
         if object.computedValues.style.shaders ~= nil then
             preRender = object.computedValues.style.shaders.preRender
         end
 
-        local cancelRender = false
+        -- Cancel render if the mask object exist AND if none of the bounds match
+        local cancelRender = (object.maskObject ~= nil and not(
+        object.bounds.topLeft.x >= object.maskObject.bounds.topLeft.x or
+        object.bounds.topLeft.y >= object.maskObject.bounds.topLeft.y or
+        object.bounds.bottomRight.y <= object.maskObject.bounds.bottomRight.y or
+        object.bounds.bottomRight.y <= object.maskObject.bounds.bottomRight.y
+        ))
+
         if preRender ~= nil then
             for i,v in pairs(preRender) do
                     if type(v) == "function" then
-                        cancelRender = v(object, i,monitor)
+                        if not cancelRender then
+                            cancelRender = v(object, i, monitor)
+                        else
+                            v(object, i, monitor)
+                        end
                     end
             end
         end
 
         if not cancelRender then
-            -- This works the same in practice as math.floor. Why this option?
-            local epsilon = .001
             local origColor = term.getTextColor();
             local cursorPrevX,cursorPrevY = term.getCursorPos();
             local prevBGColor = term.getBackgroundColour();
@@ -74,37 +83,120 @@
             local objTextColor = object.DOM.getColor(object.computedValues.style.textColor or -1, monitor)
             local objStrokeColor = object.DOM.getColor(object.computedValues.style.strokeColor or -1, monitor)
 
-            if not ( objBGColor == nil) and (objBGColor > -1) then
-                paintutils.drawFilledBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), objBGColor)
+            local topLeftX = object.w >= 0 and object.computedValues.x or object.computedValues.x + object.w
+            local topLeftY = object.h >= 0 and object.computedValues.y or object.computedValues.y + object.h
+            local width = math.abs(object.w)
+            local height = math.abs(object.h)
+
+            -- Split it by newlines so we can.. well newline.
+            local tokens = {}
+            for s in object.innerText:gmatch("[^\r\n]+") do
+                table.insert(tokens, s)
             end
-            
-            if not ( object.style.strokeColor == nil) and (object.style.strokeColor > -1) then
-                paintutils.drawBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), object.style.strokeColor)
-                term.setBackgroundColor(prevBGColor)
+
+            local textStartPos = {x = 0, y = 0}
+            local textLine = 0
+
+            if object.style.textAlign == nil or object.style.textAlign == "centered" then
+                textStartPos = {
+                    x = ((object.computedValues.x)),
+                    y = math.floor(((object.h / 2) + object.computedValues.y) - math.floor(#tokens / 2))
+                }
+            elseif object.style.textAlign == "topleft" then
+                textStartPos = {
+                    x = object.computedValues.x,
+                    y = object.computedValues.y
+                }
             end
+
+            -- Set the text colors.
             if(objTextColor ~= nil and (objTextColor ~= -1)) then
                 term.setTextColor(objTextColor)
                 if not ( objBGColor == nil) and (objBGColor > -1) then
                     term.setBackgroundColor(objBGColor)
                 end
-                local tokens = {}
-                for s in object.innerText:gmatch("[^\r\n]+") do
-                    table.insert(tokens, s)
+            end
+
+            local prevcolor = nil
+            -- Render function for both sides.
+            local renderFunction = function (x,y, color)
+                textLine = math.max(0, (topLeftY + y) - textStartPos.y)
+
+                local colorToUse = (objStrokeColor > -1 and (y == 1 or y == height or x == 1 or x == width)) and objStrokeColor or objBGColor
+
+                if(prevcolor ~= colorToUse) then
+                    term.setBackgroundColor(colorToUse)
+                end
+                
+                term.setCursorPos(topLeftX + x - 1, (topLeftY + y - 1))
+
+                prevcolor = colorToUse
+                local wroteChar = false
+                if textLine >= 0 and tokens[textLine] ~= nil then
+                    if (object.style.textAlign == nil) or object.style.textAlign == "centered" then
+                        if (x) > (math.floor(width / 2) - math.floor(#tokens[textLine] / 2)) then
+                            if textLine <= #tokens and x <= (math.floor(width / 2) + math.ceil(#tokens[textLine] / 2)) then
+                                wroteChar = true
+                                if x == width then
+                                    term.write(string.sub(tokens[textLine], (x) - (math.floor(width / 2) - math.floor(#tokens[textLine] / 2)), #tokens[textLine]))
+                                else
+                                    term.write(string.sub(tokens[textLine], (x) - (math.floor(width / 2) - math.floor(#tokens[textLine] / 2)), (x) - (math.floor(width / 2) - math.floor(#tokens[textLine] / 2))))
+                                end
+                            end
+                        end
+                    else
+                        if textLine <= #tokens and x <= (#tokens[textLine]) then
+                            wroteChar = true
+                            
+                            if x == width then
+                                term.write(string.sub(tokens[textLine], x, #tokens[textLine]))
+                            else
+                                term.write(string.sub(tokens[textLine], x, x))
+                            end
+                        end
+                    end
                 end
 
-                for num,v in ipairs(tokens) do
-                    -- I want 0 indexing.
-                    local offset = num - 1
-
-                    if object.style.textAlign == nil or object.style.textAlign == "centered" then
-                        term.setCursorPos((((object.w / 2) + object.computedValues.x) - (#v / 2)), ((object.h / 2) + object.computedValues.y + offset) - math.floor(#tokens / 2))
-                    elseif object.style.textAlign == "topleft" then
-                        term.setCursorPos(object.computedValues.x, (object.computedValues.y + offset))
-                    end
-                    
-                    term.write(v)
+                if not wroteChar then
+                    term.write(" ")
                 end
             end
+
+            if object.maskObject == nil then
+            for y = 1, height do
+                local lineInfo = term.getLine and {term.getLine(y)}
+
+                for x = 1, width do
+                    renderFunction(x,y, lineInfo ~= nil and {char = lineInfo[1][x], tCol = lineInfo[2][x], bCol = lineInfo[3][x]})
+                end
+            end
+            else
+                for y = 1, height do
+                    if topLeftY + y > object.maskObject.bounds.bottomRight.y then
+                        break
+                    elseif not (topLeftY + y < object.maskObject.bounds.topLeft.y) then
+                        for x = 1, width do
+                            if topLeftX + x > object.maskObject.bounds.bottomRight.x then
+                            break
+                            elseif not (topLeftX + x < object.maskObject.bounds.topLeft.x) then
+                                renderFunction(x,y)
+                            end
+                        end
+                    end
+                end
+            end
+
+            --[[
+            if not (objBGColor == nil) and (objBGColor > -1) then
+
+                paintutils.drawFilledBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), objBGColor)
+            end
+            
+            if not ( object.style.strokeColor == nil) and (object.style.strokeColor > -1) then
+                paintutils.drawBox(object.computedValues.x, object.computedValues.y, (object.computedValues.x + object.w - epsilon), (object.computedValues.y + object.h - epsilon), objStrokeColor)
+                term.setBackgroundColor(prevBGColor)
+            end
+            ]]
             
             term.setTextColor(origColor)
             term.setBackgroundColor(prevBGColor)
@@ -150,6 +242,14 @@
                         object.computedValues.style[style] = value
                     end
                 end
+
+                if type(object) == "table" then
+                    object:recalculateBounds()
+                end
+
+                if type(object.maskObject) == "table" and object.maskObject.recalculateBounds ~= nil then
+                    object.maskObject:recalculateBounds()
+                end
                 
             elseif object.isDirty then
                 object.computedValues = {
@@ -168,6 +268,14 @@
                         end
                     end
                 end
+                
+                if type(object) == "table" and object.recalculateBounds ~= nil then
+                    object:recalculateBounds()
+                end
+
+                if type(object.maskObject) == "table" and object.maskObject.recalculateBounds ~= nil then
+                    object.maskObject:recalculateBounds()
+                end
             end
 
         if object.colorDirty then
@@ -182,8 +290,14 @@
                 if object.style.strokeColor == nil then
                     object.DOM:registerColor(object.DOM.style.strokeColor, object)
                 end
+                if object.style.colors == nil and object.computedValues.style.colors ~= nil then
+                    for i,v in pairs(object.computedValues.style.colors) do
+                        object.DOM:registerColor(v, object)
+                    end
+                end
             end
-            object.DOM:allocateColors(monitor)
+
+            object.DOM:allocateColors(monitor, false)
         end
 
         if not object.setupDone then
@@ -309,7 +423,10 @@
                             table.remove(orderBuffer, v3 - offset)
                             offset = offset + 1
                         end
-                    -- Swap visibility so that we can see our drawing. We do this after rendering to reduce
+
+                    
+                    v2:allocateColors(monitor, true)
+                    -- Swap visibility so that we can see our drawing. We do this after rendering to reduce flicker
                     monitor.buffers[1].setVisible(not monitor.buffers[1].isVisible())
                     monitor.buffers[2].setVisible(not monitor.buffers[2].isVisible())
                     v2.hooks.onFrameEnd()
@@ -418,27 +535,38 @@
 
 
             self.hooks.onSetParent(self, object)
+
             if self.DOM ~= nil and object.DOM ~= nil then
                 self.DOM:relinquishColor(self.style.textColor, nil, self)
                 self.DOM:relinquishColor(self.style.bgColor, nil, self)
             end
+
             if self.parent ~= nil then
-                table.remove(table_contains(self.parent.children, self))
+                pcall(table.remove(table_contains(self.parent.children, self)))
             end
+            
             self.parent = object
             self.DOM = object.DOM
+
             if self.DOM ~= nil then
                 self.DOM.hooks.onAddChild(self.DOM, self)
                 self.DOM:registerColor(self.style.textColor, self)
                 self.DOM:registerColor(self.style.bgColor, self)
             end
+
             table.insert(self.parent.children, self)
+
             if self.DOM ~= nil then
                 recursiveReDOM(self,self.DOM)
             end
+
             self.parent.zDirty = true
             self.zDirty = true
             flagZDirty(self.parent)
+
+            if self.parent.maskObject ~= nil then
+                self:setMask(self.parent.maskObject)
+            end
 
             flagForRedraw(self)
         end
@@ -474,6 +602,7 @@
             z = 1,
             w = 1,
             h = 1,
+            bounds = {},
             enabled = true,
             parent = nil,
             children = {},
@@ -492,6 +621,14 @@
             DOM = nil,
             Render = defaultMaterial -- Materials are the functions called to render an object. No I will not be normal
         }
+
+        -- set up the bounds.
+            -- Keep the w and h of the defaults non negative
+        builder.bounds = {
+            topLeft = {x = builder.x, y = builder.y},
+            bottomRight = {x = builder.x + builder.w, y = builder.y + builder.h},
+        }
+
         bedrockCore:createHook(self, "onEnable"):createHook(self, "onDisable"):createHook(self, "onVisibilityChange", "boolean")
         
         -- The first table is the object that has experience the change 
@@ -530,6 +667,9 @@
             z = function ()
                 self:setZ(value)
             end,
+            ["z-index"] = function ()
+                self:setZ(value)
+            end,
             width = function ()
                 self:setWidth(value)
             end,
@@ -552,7 +692,7 @@
         end
 
         flagForRedraw(self)
-
+              
         self.hooks.onStyleChange(self, style, value)
         return self, true
     end
@@ -567,6 +707,22 @@
         self:setBackgroundColor(bgColor)
         self:setTextColor(textColor)
         return self
+    end
+
+    --- Recalculates the bounds of an object. Used for masking, and autowrap.
+    function ObjectBase:recalculateBounds()
+        local valsToUse = self.computedValues or self
+        if valsToUse.x == nil or valsToUse.y == nil then
+            return self, false
+        end
+
+        -- Ye old utility function
+        self.bounds.topLeft.x = self.w >= 0 and valsToUse.x or valsToUse.x + self.w
+        self.bounds.topLeft.y = self.h >= 0 and valsToUse.y or valsToUse.y + self.h
+        self.bounds.bottomRight.x = self.w < 0 and valsToUse.x or valsToUse.x + self.w
+        self.bounds.bottomRight.y = self.h < 0 and valsToUse.y or valsToUse.y + self.h
+
+        return self, true
     end
 
     --- Sets the text color of an object
@@ -779,19 +935,35 @@
         return self
     end
 
+    -- Object masks are used to stop an object from rendering outside another object.
+    function ObjectBase:setMask(object)
+        self.maskObject = object
+        object:recalculateBounds()
+            -- Recursion?.... Maybe a little
+            if type(self.children) == "table" then
+                for i,v in pairs(self.children) do
+                    v:setMask(object)
+                end
+            end
 
-    local MaskObject = {}
-
-
-    -- It is no different an inferface but like... you can't render outside of it.
-    function MaskObject.new()
-        local builder = {}
-
-        setmetatable(builder, {__index = ObjectBase})
-        builder = ObjectBase:new()
-
-        return builder
+        return self
     end
+
+    function ObjectBase:destroy()
+
+        -- Disable, then unparent it
+        self:disable()
+        self:setParent(nil)
+        
+        -- Free all associated memory. We don't care what happens from here
+        for i,v in pairs(self) do
+            self[i] = nil
+        end
+        
+        self.destroyed = true
+
+    end
+    
 --[[+---------------+
     |  DOM SECTION  |
     +---------------+]]
@@ -905,39 +1077,40 @@
                 if v.preComputedValue == code or v.value == code then
                     return 2 ^ (i - 1), code, i
                 end
-                
             end
             
+            local codeRGB = vector.new(colors.unpackRGB(code))
+            local closest = nil
+            local minDifference = -1
+
             -- For colors that don't exist or failed to make it in. Find their closest match.
-            table.sort(renderableSubset, function (a, b)
-                if a == nil or b == nil then
-                    -- This isn't possible. It's a logic bomb. Don't worry JIT will make sure it will happen
-                    error("Illegal state! Hole found in the palette!")
+            for i,v in ipairs(renderableSubset) do
+                -- Basically euclidean distance calculation.
+                -- Probably a bit expensive, but it should be more efficient than my last solution
+                local colorVector = vector.new(colors.unpackRGB(v.value))
+                local difference = (codeRGB - colorVector):round(0.003):length()
+
+                if minDifference < 0 or difference <= minDifference then
+                    minDifference = difference
+                    closest = colorVector
                 end
-                -- Sort the value with the least difference 
-                local Adifference = 0
-                local Bdifference = 0
-                local codeRGB = {colors.unpackRGB(code)}
-                for i,v in ipairs(table.pack(colors.unpackRGB(a.value))) do
-                    Adifference = Adifference + math.abs((v) - (codeRGB[i]))
-                end
-                for i,v in ipairs(table.pack(colors.unpackRGB(b.value))) do
-                    Bdifference = Bdifference + math.abs((v) - (codeRGB[i]))
-                end
-                return Adifference < Bdifference
-            end)
+            end
+
             for i,v in pairs(monitor.colorsInUse) do
                 -- Return the closest value that is contained.
-                if v == renderableSubset[1] then
+                if v.value == colors.packRGB(closest.x, closest.y, closest.z) then
                     return 2 ^ (i - 1), v, i
                 end
             end
 
+            local fh = fs.open("/error.log", "w")
+
             -- If you got here, then you are firmly in traceback territory. Sorry! Well not traceback, but I mean, close.
             for i,v in pairs(renderableSubset) do
-                print(i,v)
+                fh.writeLine(tostring(i) .. ": " .. tostring(v.value))
             end
-            read()
+            fh.writeLine("closest: " .. tostring(closest))
+            fh.close()
 
             -- No color being found means there were no colors to search. We shouldn't be able to get here, hence the error.
             error("No color found for color: " .. code .. "(" .. #renderableSubset .. " Colors in the palette)")
@@ -1056,7 +1229,7 @@
     --- Oh and it'll eat resources like nobodies business.
     --- @param monitor genericMonitor
     --- @return self
-    function DomBuilder:allocateColors(monitor)
+    function DomBuilder:allocateColors(monitor, push)
             -- Jit forcing me to add explicit checks yet again; hooks can't not exist.
             if self.hooks ~= nil then
             self.hooks.onPreallocatePallete(monitor.colorsInUse, monitor.colors, monitor.unrenderedSubset or {})
@@ -1068,7 +1241,7 @@
             end
             
             for i,v in pairs(monitor.colors) do
-                if v ~= nil then 
+                if v ~= nil then
                 table.insert(renderableSubset,v)
                 end
             end
@@ -1081,7 +1254,7 @@
                 else
                     return a.value > b.value
                 end
-            end) 
+            end)
 
             for i,v in ipairs(renderableSubset) do
                 v.inPallete = i <= 16
@@ -1099,15 +1272,19 @@
             for i,v in ipairs(unrenderedSubset) do
                 -- Gets the color closest to v. Side note. This is mostly used for rendering and quantization. I love cheating and reusing code
                 local _, _, closestI = self.getColor(v.value, monitor)
-                local rgb1 = {colors.unpackRGB(renderableSubset[closestI].value)}
-                local rgb2 = {colors.unpackRGB(v.value)}
-                for i, v2 in ipairs(rgb1) do
-                    rgb1[i] = rgb1[i] + (rgb2[i] * (v.instances * v.size / (renderableSubset[closestI].instances * renderableSubset[closestI].size)))
-                end
-                renderableSubset[closestI].rgb = rgb1
+                local rgb1 = vector.new(colors.unpackRGB(renderableSubset[closestI].value))
+                local rgb2 = vector.new(colors.unpackRGB(v.value))
+
+                
+
+                rgb1 = (rgb1 + (rgb2 * (v.instances * v.size / (renderableSubset[closestI].instances * renderableSubset[closestI].size))))
+                
+                renderableSubset[closestI].rgb = {rgb1.x, rgb1.y, rgb1.z}
                 renderableSubset[closestI].avgInstances = renderableSubset[closestI].avgInstances ~= nil and renderableSubset[closestI].avgInstances + 1 or 1
             end
             
+
+
 
             monitor.colorsInUse = {}
             for i,v in ipairs(renderableSubset) do
@@ -1121,15 +1298,18 @@
                 end
                 monitor.colorsInUse[i] = v
                 local colorIdx = 2^(i-1)
-                monitor.functions.setPaletteColour(colorIdx, v.value)
-                monitor.buffers[1].setPaletteColour(colorIdx, v.value)
-                monitor.buffers[2].setPaletteColour(colorIdx, v.value)
+                if push then
+                    monitor.functions.setPaletteColour(colorIdx, v.value)
+                    monitor.buffers[1].setPaletteColour(colorIdx, v.value)
+                    monitor.buffers[2].setPaletteColour(colorIdx, v.value)
+                end
             end
-            if self.hooks then
+            if self.hooks and push then
                 self.hooks.onAllocatePallete(monitor.colorsInUse, renderableSubset, monitor.colors, unrenderedSubset or {})
             end
         return self
     end
+
     --- Clears the DOM and attempts to relinquish it's resources
     --- @return self
 
@@ -1223,7 +1403,7 @@
 
                 }
             },
-            version = "0.3.1", -- Huh actually semVering for once. God
+            version = "0.4.1", -- Huh actually semVering for once. God
             priority = 1,
         },
         domBuilder = DomBuilder,

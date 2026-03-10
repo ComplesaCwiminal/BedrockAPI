@@ -13,11 +13,11 @@
     local DOM = bedrockGraphics.domBuilder:new():addMonitor(monitor)
 
     local menu = bedrockUI.menuBuilder:new(DOM)
-    local Obj1 = bedrockUI.menuObjectBuilder.new():setBackgroundColor("#FF0000"):setSize("50%","50%"):setParent(menu)
-    local Obj2 = bedrockUI.menuObjectBuilder.new():setBackgroundColor("#00FF00"):setX("50%"):setSize("50%","50%"):setParent(menu)
-    local Obj3 = bedrockUI.menuObjectBuilder.new():setBackgroundColor("#0000FF"):setY("50%"):setSize("50%","50%"):setParent(menu)
-    local Obj4 = bedrockUI.menuObjectBuilder.new():setBackgroundColor("#BADEC2"):setX("50%"):setY("50%"):setSize("50%","50%"):setParent(Obj3)
-    local button = bedrockUI.buttonBuilder.new():setSize("50%","50%"):setText("Detonate"):setZ(2):setBackgroundColor("#E62A2A"):setParent(menu)
+    local Obj1 = bedrockUI.menuObjectBuilder:new():setBackgroundColor("#FF0000"):setSize("50%","50%"):setParent(menu)
+    local Obj2 = bedrockUI.menuObjectBuilder:new():setBackgroundColor("#00FF00"):setX("50%"):setSize("50%","50%"):setParent(menu)
+    local Obj3 = bedrockUI.scrollAreaBuilder:new():setBackgroundColor("#0000FF"):setY("50%"):setSize("50%","50%"):setParent(menu)
+    local Obj4 = bedrockUI.menuObjectBuilder:new():setBackgroundColor("#BADEC2"):setX("50%"):setY("50%"):setSize("50%","50%"):setParent(Obj3)
+    local button = bedrockUI.buttonBuilder:new():setSize("50%","50%"):setText("Detonate"):setZ(2):setBackgroundColor("#E62A2A"):setParent(menu)
 
     local textBox = bedrockUI.textInputBuilder.new():setSize("90%", "2px"):setX(5):setZ(999):setY(1):setParent(menu)
     local percentBox = bedrockUI.progressBarBuilder.new():setSize("90%", "2px"):setX(5):setZ(999):setY(3):setParent(menu)
@@ -45,10 +45,12 @@
         parallel.waitForAny(function ()
             while true do
                 button:setBackgroundColor("#E62A2A")
-                Obj2:setY("50%")
+                Obj2:setY("eval(50% + 1px)")
+                Obj2:setText("1" .. Obj2.style.y)
                 os.sleep(1)
                 button:setBackgroundColor("#D8D836")
-                Obj2:setY("0%")
+                Obj2:setY("eval(0% + 1px)")
+                Obj2:setText("2 " .. Obj2.style.y)
                 os.sleep(1)
             end
         end,

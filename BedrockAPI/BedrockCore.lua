@@ -515,8 +515,17 @@ local function eventHandler(nonce)
         local event = table.pack(os.pullEventRaw())
         local eventName = event[1]
         local doTerminate = eventName == "terminate" -- It only CAN be true if it's a terminate
+        
             for _,v in pairs(registeredCores) do
             if multishell == nil or v.nonce == nonce then
+                    for i3, v3 in pairs(v.threads) do
+                        if v3.eventNeeded == eventName or v3.eventNeeded == "" or v3.eventNeeded == " " then
+
+                            v3.eventValues = event
+                            v3.eventNeeded = nil
+                        end
+                    end
+
                     local flaggedEventFuncs = {}
                     if v.events ~= nil then
                         flaggedEventFuncs = {}
@@ -797,10 +806,27 @@ function CoreBuilder:build()
 end
 
 function CoreBuilder:addThread(Coroutine, Precon, ...)
+    if type(Coroutine) == "function" then
+        Coroutine = coroutine.create(Coroutine)
+    end
     local params = table.pack(...)
-    table.insert(self.threads, {routine = Coroutine, precon = function ()
+
+
+    local threadProxy = {
+        hasRan = false,
+        finished = false,
+        errors = nil,
+        results = false
+    }
+    threadProxy.await = function ()
+            while threadProxy.finished == false do
+                os.pullEvent()
+            end
+        end
+    table.insert(self.threads, {proxy = threadProxy, isNew = true, routine = Coroutine, precon = Precon and function ()
        Precon(table.unpack(params))
-    end})
+    end or nil, eventNeeded = nil, eventValues = nil})
+    return threadProxy
 end
 function CoreBuilder:Cleanup(disallowShutdown)
     parallel.waitForAny(function() os.sleep(2) end, function ()
@@ -876,10 +902,29 @@ local function update(nonce)
 
                 local coremains = {}
 
-                for i,v in pairs(v.threads) do
+                for i1555,v1555 in pairs(v.threads) do
                     table.insert(coremains, function ()
-                        if coroutine.status(v.routine) ~= "dead" and (v.precon ~= nil and v.precon() or true) then
-                            coroutine.resume(v.routine)
+                        local precon = (v1555.precon ~= nil and v1555.precon() or true)
+                        if v1555.eventNeeded == nil and coroutine.status(v1555.routine) ~= "dead" and precon then
+                            v1555.proxy.hasRan = true
+                            local rs = table.pack(coroutine.resume(v1555.routine, table.unpack(v1555.eventValues or {})))
+                            
+                            if coroutine.status(v1555.routine) == "dead" then
+                                if not rs[1] then
+                                    table.remove(rs, 1)
+                                    v1555.proxy.errors = rs
+                                else
+                                    table.remove(rs, 1)
+                                    v1555.proxy.results = rs
+                                end
+                                
+                                v1555.proxy.finished = true
+                            else
+                                v1555.eventNeeded = rs[2] or ""
+                            end
+                        elseif coroutine.status(v1555.routine) == "dead" then
+                            v1555.proxy.finished = true
+                            v.threads[i1555] = nil
                         end
                     end)
                 end

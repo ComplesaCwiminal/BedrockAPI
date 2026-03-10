@@ -28,13 +28,15 @@
     local monitor = bedrockInput.GetGenericDisplayPeripheral(term)
 
     local DOM = bedrockGraphics.domBuilder:new():addMonitor(monitor)
-    
-    --bedrockUI.scrollBarBuilder:new():computeHandleSize():setParent(bedrockUI.menuBuilder:new(DOM):setPosition(1,1,-99999):setSize(monitor.width, monitor.height)):setSize("100%", "100%")
 
-    local object1 = bedrockGraphics.objectBase:new():setPosition(17, 15, 8):setBackgroundColor(0xFFC654):setText("Hey there big boy.")
-    local object2 = bedrockGraphics.maskObject:new():setText("OBJECTS???"):setPosition(5, 5, 7):setSize(monitor.width - 8, monitor.height / 3):setBackgroundColor(0x00ff00):setTextColor(0x101010)
+    local object1 = bedrockGraphics.objectBase:new():setPosition(17, 15, 8):setBackgroundColor(0xFFC654):setText("Hey there big boy."):setStyle("textAlign", "topleft")
+    local maskObject = bedrockGraphics.objectBase:new():setPosition(5, 5, 6):setSize(monitor.width - 8, monitor.height / 3):setBackgroundColor(-1):setTextColor(-1)
+
+    local object2 = bedrockGraphics.objectBase:new():setText("OBJECTS???"):setPosition(5, 5, 7):setSize(monitor.width - 8, monitor.height / 3):setBackgroundColor(0x00ff00):setTextColor(0x101010):setMask(maskObject)
+     
     local object3 = bedrockGraphics.objectBase:new():setText("Gotta wonder the performance hit"):setPosition(2, 2, 10)
-    local gayObject = bedrockGraphics.objectBase:new():setZ(-10):setSize(monitor.width, monitor.height):setTextColor(0x101010):setBackgroundColor(0xFFFFFF):setParent(DOM)
+
+    local gayObject = bedrockGraphics.objectBase:new():setZ(-10):setSize(monitor.width, monitor.height):setTextColor(0x101010):setBackgroundColor(0x555555):setParent(DOM)
     local objectTooMany = bedrockGraphics.objectBase:new():setText("Hey look! General relativity. Wait no."):setPosition(14, 6, 999):setSize(30, 1):setParent(object2)
     local object4 = bedrockGraphics.objectBase:new():setText("FPS: 0"):setPosition(1, 1, 999):setTextColor(0xFFFFFF):setStyle("textAlign", "topleft"):setParent(gayObject)
     object1:setParent(DOM)
@@ -66,17 +68,19 @@
     -- Basic hook test. 
     local iter = 0
     bedrockGraphics.moduleDefinition.hooks.OnRenderFrameEnd.addHook(function ()
-        object2:setText("OBJECTS??? " .. (multishell ~= nil and multishell.getCurrent() or "N/A") .. "\n Monitor: " .. monitor.base.name .. ", " .. monitor.base.type .. "\n" .. iter .. "\n W: " .. monitor.width .. " H: " .. monitor.height .. "\nBuffer: " .. (monitor.buffers[1].isVisible() and 1 or 2))
+        object2:setText("OBJECTS??? " .. (multishell ~= nil and multishell.getCurrent() or "N/A") .. "\n Monitor: " .. monitor.base.name .. ", " .. monitor.base.type .. "\n" .. iter .. "\n W: " .. monitor.width .. " H: " .. monitor.height .. "\n" .. object2.maskObject.bounds.bottomRight.x .. " " .. object2.maskObject.bounds.bottomRight.y .. "\nBuffer: " .. (monitor.buffers[1].isVisible() and 1 or 2))
         iter = iter + 1
     end)
 
     -- This is a nightmare stress test for our graphics test. Uhh trust me it doesn't survive. (Well the colors don't) (gotta know your limits, ey?)
     --[[
-    for i = 2, monitor.width - 1 do
-        local value = i / monitor.width
-        local color = colors.packRGB(value, value, value)
+    for i = 2, 30 do
+        local value = 1 / i
+
+        local color = colors.packRGB((182 / 255), value, (16 / 255))
         bedrockGraphics.objectBase:new():setPosition(i, 3, 999):setSize(1,1):setBackgroundColor(color):setParent(DOM)
-    end]]
+    end
+    ]]
 
     local function main()
         local rgbVals = {0,0, 1}

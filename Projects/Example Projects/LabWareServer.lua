@@ -201,12 +201,15 @@
             local deviceDescriptors = {}
             for i,v in pairs(devices) do
                 local success, value = bedrockCore.GetSharedValue(tostring(v))
+
                 if success then
                     deviceDescriptors[clients[v].clientID] = value
                 end
             end
 
             deviceDescriptors.queryResult = true
+            
+            os.sleep(0.15)
             BedrockNetworkServer.sendMessage(sender, deviceDescriptors, protocol)
         end)
 

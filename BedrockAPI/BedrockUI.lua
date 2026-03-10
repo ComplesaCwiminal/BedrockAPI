@@ -353,6 +353,8 @@ local focused = nil
         if clickedObj == nil then
             return
         end
+        term.setTextColor(colors.purple)
+        print("AAAAAAAAAAAAAAAAAAAAAAAAA")
 
         -- Unlike focusing. Any new click defocuses old stuff.
         if lastFocusObj ~= nil then
@@ -471,6 +473,28 @@ local focused = nil
     local function removeNavKey(navType, addNavKey)
 
     end
+    local function parseVariable(object, variable, noStyleRecalcs)
+        local v = variable
+
+        if object ~= nil then
+            if not noStyleRecalcs then
+                object:recalculateStyles("variables")
+            end
+
+            if type(v) == "string" and string.sub(v, 1, 2) == "--" then
+                if object.computedStyle.variables == nil then
+                    object:recalculateStyles("variables")
+                end
+
+                --print(object.computedStyle.variables[string.sub(v, 3, #v)])
+                if object.computedStyle.variables[string.sub(v, 3, #v)] ~= nil then
+                    v = object.computedStyle.variables[string.sub(v, 3, #v)]
+                end
+            end
+        end
+
+        return v
+    end
     -- Turns a complex unit (eg. %, vw, vh, etc.) into a raw pixel value. 
     local function computeNumericalUnit(object, givenNum, valueName, refObject)
         if type(givenNum) == "string" then
@@ -579,6 +603,200 @@ local focused = nil
         return givenNum, false
     end
 
+    -- What. Never had to implement mathematical expressions by hand?
+    local operators = {
+        ["("] = true, [")"] = true,
+        ["/"] = function (a,b) return a / b end, ["*"] = function (a,b) return a * b end,
+        ["+"] = function (a,b) return a + b end, ["-"] = function (a,b) return a - b end,
+        ["^"] = function (a,b) return math.pow(a,b) end
+    }
+    local order = {
+        ["("] = -1,
+        [")"] = -1,
+        ["/"] = 2, ["*"] = 2,
+        ["+"] = 1, ["-"] = 1,
+        ["^"] = 3,
+    }
+
+    -- Verifies an expression can be parsed.
+    -- ergo it doesn't include unknown tokens, and all parethesis get closed. 
+    local function verifyExpression(object, expression, valueName)
+
+        if type(expression) ~= "string" then
+            return false, expression
+        end
+
+        expression = string.gsub(expression, "%s+", "")
+
+        local num = 0
+        local failed = false
+        local evaledExpression = ""
+        local token = ""
+
+        for char in string.gmatch(expression, ".") do
+            -- Append the char to the token if it's not an operator. Otherwise
+            if operators[char] == nil then
+                token = token .. char
+            else
+
+                -- compute it as a numerical unit
+                local result = computeNumericalUnit(object, parseVariable(object, token, true), valueName)
+                
+                -- it returns false if it fails, meaning something wasn't a number.
+                if result ~= false then
+                    evaledExpression = evaledExpression .. tostring(result)
+                else
+                    failed = true
+                    break
+                end
+
+                -- Append the operator, then clear the token.
+                evaledExpression = evaledExpression .. char
+                token = ""
+            end
+
+            -- Uhhhh. Make sure parethesis are legal >:(
+            if char == "(" then
+                num = num + 1
+            elseif char == ")" then
+                num = num - 1
+
+                if num <= -1 then
+                    break
+                end
+            end
+        end
+        local result = computeNumericalUnit(object, parseVariable(object, token, true), valueName)
+        
+        if result == false then
+            failed = true
+        else
+            evaledExpression = evaledExpression .. result
+        end
+
+        if num ~= 0 then
+            failed = true
+        end
+
+        if not failed then
+        return not failed, evaledExpression
+        end
+        return not failed, expression
+    end
+    
+    -- Takes in a math problem and converts it to postfix.
+    -- Some say postfix is easier, but my lost sleep disagrees.
+    local function postfixConvert(mathProblem)
+        local outputQueue = {}
+        local operatorStack = {}
+
+        -- No. Neither you or I will be able to understand this in a week.
+        for i,v in ipairs(mathProblem) do
+            if type(v) == "number" then
+                table.insert(outputQueue, v)
+            elseif v == "(" then
+                table.insert(operatorStack, v)
+            elseif v == ")" then
+                while #operatorStack > 0 do
+                    local topSymbol = operatorStack[#operatorStack]
+                    if topSymbol == "(" then
+                        table.remove(operatorStack)
+                        break
+                    else
+                        table.insert(outputQueue, table.remove(operatorStack))
+                    end
+                end
+            else
+                if #operatorStack > 0 then
+                local topSymbol = operatorStack[#operatorStack]
+
+                if topSymbol == "(" then
+                    table.insert(operatorStack, v)
+                elseif topSymbol ~= nil and order[topSymbol] >= order[v] then
+                    table.insert(outputQueue, table.remove(operatorStack))
+                    table.insert(operatorStack, v)
+                else
+                    table.insert(operatorStack, v)
+                end
+                else
+                    table.insert(operatorStack, v)
+                end
+            end
+        end
+        
+        while #operatorStack > 0 do
+            table.insert(outputQueue, table.remove(operatorStack))
+        end
+
+        return outputQueue
+    end
+
+    -- I'm about to mathematically express my... uhhhhhhhh. nevermind.
+    local function evaluateExpression(object, expression, valueName)
+
+        local worked, num = verifyExpression(object, expression, valueName)
+
+        if not(worked) then
+            return false, expression
+        else
+            local numStack = {}
+            local tokenStack = {}
+            -- Actually math the expression.
+            for char in string.gmatch(num, ".") do
+                if operators[char] ~= nil then
+                    -- If the last token was an operator, there's no inbetween token, and this character is minus
+                    if(type(numStack[#numStack]) ~= "number" and #tokenStack == 0 and char == "-") then
+                        -- it's negative
+                        
+                        table.insert(tokenStack, char)
+                    else
+                        local num = tonumber(table.concat(tokenStack))
+
+                        -- Append the token before the operand, and the operand
+                        table.insert(numStack, num)
+                        table.insert(numStack, char)
+
+                        -- clear the stack for the next token
+                        tokenStack = {}
+                    end
+                else
+
+                    -- Just toss the char onto the token stack.
+                    table.insert(tokenStack, char)
+                end
+            end
+
+            -- If anythings left behind in the token stack, push it.
+            if #tokenStack > 0 then
+                table.insert(numStack, tonumber(table.concat(tokenStack)))
+            end
+
+            -- convert it to postfix notation, because computers
+            local res = postfixConvert(numStack)
+
+            local numStackV2 = {}
+            local success = pcall(function ()
+                for i,v in ipairs(res) do
+                    if type(v) == "number" then
+                        table.insert(numStackV2, v)
+                    else
+                        local op2 = table.remove(numStackV2)
+                        local op1 = table.remove(numStackV2)
+
+                        table.insert(numStackV2, operators[v](op1, op2))
+                    end
+                end
+            end)
+
+            if success then
+                -- FUCKING FINALLY
+                return true, numStackV2[1]
+            else
+                return false, expression
+            end
+        end
+    end
+
     -- We internally need our colors to be a number. eg. 0x0f2fac
     local function parseColor(aColor)
         if type(aColor) == "string" then
@@ -617,12 +835,15 @@ local focused = nil
         
         local objectInstance = inherited:new()
         setmetatable(copy, {__index = objectInstance})
-        copy.__index = objectInstance
         
-        setmetatable(object, {__index = copy})
+        copy.__index = objectInstance
 
         -- This just allows you to get your base/super or whatever. You need it, trust me.
         object.__index = copy
+
+        setmetatable(object, {__index = copy})
+
+
         
         return object
     end
@@ -697,6 +918,7 @@ local focused = nil
             height = builder.h,
             focusable = false,
             visible = true,
+            variables = {}, -- Tastes like cascading.
         }
 
         builder.absolutes = {
@@ -730,6 +952,7 @@ local focused = nil
                 builder.focused = false
         end)
 
+        builder:recalculateStyles("variables")
         builder:recalculateStyles()
 
         return builder
@@ -750,30 +973,84 @@ local focused = nil
 
             for i,v in pairs(self.style) do
                 local result
-
-                    result = computeNumericalUnit(self, v, i)
-                    if type(result) ~= "number" then
-                        result = parseColor(v)
-                        if type(result) ~= "number" then
+                    if(type(v) == "string" and string.sub(v, 1, 5) == "eval(") then
+                        local success
+                        success, result = evaluateExpression(self, string.sub(v, 6, #v - 1), i)
+                        if not success then
                             result = v
                         end
+                    else
+                        v = parseVariable(self, v, true)
+
+                        result = computeNumericalUnit(self, v, i)
+                        if type(result) ~= "number" then
+                            result = parseColor(v)
+                            if type(result) ~= "number" then
+                                result = v
+                            end
+                        end
                     end
+
                 local prev = self.computedStyle[i]
                 local success = pcall(self.gObject.setStyle, self.gObject, i, result)
+                
                 if(success) then
-                self.computedStyle[i] = result
+                    self.computedStyle[i] = result
                 else
                     pcall(self.gObject.setStyle, self.gObject, i, prev)
                 end
             end
+        elseif style == "variables" then
+            if self.menu ~= nil then
+                for i,v in pairs(self.menu) do
+                    if self.computedStyle.variables == nil then
+                        self.computedStyle.variables = {}
+                    end
+
+                    if self.style.variables[i] == nil then
+                            self.computedStyle.variables[i] = v
+                    else
+                        self.computedStyle.variables[i] = self.menu.style.variables[i]
+                    end
+                end
+            end
+
+            if(self.parent ~= nil) then
+                for i,v in pairs(self.parent.style.variables) do
+                    if self.computedStyle.variables == nil then
+                        self.computedStyle.variables = {}
+                    end
+
+                    if self.style.variables[i] == nil then
+                            self.computedStyle.variables[i] = v
+                    else
+                        self.computedStyle.variables[i] = self.style.variables[i]
+                    end
+
+                end
+            end
+            self:recalculateStyles()
         else
             if self.style[style] == nil then
                 if self.parent ~= nil and self.parent.style ~= nil then
                         self.style[style] = self.parent.style[style]
                 end
             end
+            local styleobj
+            local result
 
-            local result = computeNumericalUnit(self, self.style[style], style)
+            if(type(self.style[style]) == "string" and string.sub(self.style[style], 1, 5) == "eval(") then
+                local success
+                success, result = evaluateExpression(self, string.sub(self.style[style], 6, #self.style[style] - 1), style)
+
+                if not success then
+                    result = self.style[style]
+                end
+
+            else
+                styleobj = parseVariable(self, self.style[style], true)
+
+                result = computeNumericalUnit(self, styleobj, style)
 
                 if type(result) ~= "number" then
                     result = parseColor(self.style[style])
@@ -781,21 +1058,32 @@ local focused = nil
                         result = self.style[style]
                     end
                 end
+            end
 
             local prev = self.computedStyle[style]
             local success = pcall(self.gObject.setStyle, self.gObject, style, result)
             if(success) then
-            self.computedStyle[style] = result
+                self.computedStyle[style] = result
             else
                 pcall(self.gObject.setStyle, self.gObject, style, prev)
             end
         end
 
-        if self.parent ~= nil then
+        if self.menu ~= nil then
+            
+            local parentVals = {}
+            
+            if self.parent ~= nil then
+                parentVals = {
+                    x = (self.parent.absolutes.x or self.parent.computedStyle.x),
+                    y = (self.parent.absolutes.y or self.parent.computedStyle.y),
+                    z = (self.parent.absolutes.z or self.parent.computedStyle["z-index"]),
+                }
+            end
         self.absolutes = {
-            x = (self.parent.absolutes.x or 0) + (self.computedStyle.x or 0),
-            y = (self.parent.absolutes.y or 0) + (self.computedStyle.y or 0),
-            z = (self.parent.absolutes.z or 0) + (self.computedStyle["z-index"] or 0)
+            x = (parentVals.x or 0) + (self.computedStyle.x or 0),
+            y = (parentVals.y or 0) + (self.computedStyle.y or 0),
+            z = (parentVals.z or 0) + (self.computedStyle["z-index"] or self.computedStyle.z or 0)
         }
 
         flagNodeDirty(self) -- Quad tree? in the modern era? It's more likely than you'd think
@@ -816,6 +1104,7 @@ local focused = nil
                 if self.quadNode ~= nil --[[and self.focusable]] then
                     self.quadNode.x = self.absolutes.x
                     self.quadNode.y = self.absolutes.y
+                    self.quadNode.z = self.absolutes.z
                     self.quadNode.w = self.computedStyle.width
                     self.quadNode.h = self.computedStyle.height
                     self.quadNode.objRef = self
@@ -825,6 +1114,7 @@ local focused = nil
                     local quadNode = {
                         x = self.absolutes.x,
                         y = self.absolutes.y,
+                        z = self.absolutes.z,
                         w = self.computedStyle.width,
                         h = self.computedStyle.height,
                         objRef = self,
@@ -845,7 +1135,7 @@ local focused = nil
     -- As most things are in this framework, this position is relative to your parent
     function MenuObjectBuilder:setPosition(x,y,z)
 
-        self:SetX(x):SetY(y):SetZ(z)
+        self:setX(x):setY(y):setZ(z)
 
         flagNodeDirty(self)
         return self
@@ -981,6 +1271,8 @@ local focused = nil
             return
         end
 
+        Object:recalculateStyles("variables")
+
         for i,v in pairs(Object.children) do
             recursiveReMenu(v, Object)
         end
@@ -1003,6 +1295,11 @@ local focused = nil
         self.gObject:addChild(Object.gObject)
 
         self:recalculateStyles()
+        self:recalculateStyles("variables")
+
+        if self.computedStyle.mask ~= nil then
+            self.gObject:setMask(self.computedStyle.mask.gObject)
+        end
 
         if Object.menu ~= nil and Object.menu.quadTrees ~= nil then
 
@@ -1069,9 +1366,26 @@ local focused = nil
 
         return self, true
     end
+    
+    function MenuObjectBuilder:setVariable(variable, value)
+        self.style.variables[variable] = value
+
+        self:recalculateStyles("variables")
+
+        return self
+    end
+
+    function MenuObjectBuilder:setMask(object)
+        self.style.mask = object
+        self.gObject:setMask(object.gObject)
+        return self
+    end
 
     local MenuBuilder = {}
-
+    local defaultVariables = {
+        ["semi-dark"] = "#CCCCCC",
+        ["light"] = "#FCFCFC",
+    }
     -- Use a DOM from bedrockGraphics only.
     --- Instantiates a new menu instance. This is similar to a DOM from web development, but can be nested unlike a DOM.
     --- Typically though, you should never nest menus unless you have a good reason to. Another similar concept could be UI Canvases from Unity
@@ -1117,6 +1431,7 @@ local focused = nil
             width = builder.w,
             height = builder.h,
             color = builder.color,
+            variables = {},
             --textColor = colors.packRGB(term.nativePaletteColor(colors.black))
         }
 
@@ -1162,6 +1477,9 @@ local focused = nil
             table.insert(menus[v], builder) -- This is important because this is what decides which quadtrees we should query. We query all quadtrees on the monitor that has been clicked, but not ones on other monitors. That'd be wasteful.
         end
 
+        for i,v in pairs(defaultVariables) do
+            builder:setVariable(i, v)
+        end
         return builder
     end
     function MenuBuilder:addChild(Object)
@@ -1283,56 +1601,23 @@ local focused = nil
         self.gObject:setBackgroundColor(color)
         return self
     end
+    function MenuBuilder:setVariable(variable, value)
+        self.style.variables[variable] = value
 
-    local ScrollBarBuilder = {}
-    function ScrollBarBuilder:new()
-        local builder = {
-            backgroundObj = MenuObjectBuilder:new(),
-            scrollHandle = MenuObjectBuilder:new(),
-            scrollMin = 0,
-            scrollMax = 0,  -- SET THESE LATER
-            scrollCurrent = 0,
-        }
-        
-        inheritFromInstance(self, builder, MenuObjectBuilder)
-        
-        builder:enable()
-
-        -- This is obvious, but forgetting it would be disasterous.
-        builder.backgroundObj:setParent(builder):setSize("100%", "100%")
-        builder.scrollHandle:setParent(builder.backgroundObj)
-
-        return builder
-    end
-
-    function ScrollBarBuilder:computeHandleSize()
-        
+        for i,v in pairs(self.children) do
+            if v.recalculateStyles ~= nil then
+                v:recalculateStyles("variables")
+            end
+        end
         return self
-    end
-
-    local ScrollAreaBuilder = {}
-
-    -- It's mostly just a basic menu object that scrolls
-    function ScrollAreaBuilder:new()
-        -- Derivation is based.
-        local builder = {
-            scrollbarObject = ScrollBarBuilder:new(), -- TODO
-            body = {},
-            scrollPos = 0
-        }
-
-        inheritFromInstance(ScrollAreaBuilder, builder, MenuObjectBuilder)
-        
-        builder:addEventCallback(navTypesLUT.scroll, function ()
-            -- TODO
-        end)
-
-        return builder
     end
 
     local ButtonBuilder = {}
     
     local function handleTinting(colorA, colorB, opacity)
+        if type(colorA) == "boolean" or type(colorB) == "boolean" then
+            error(tostring(colorA) .. " " .. tostring(colorB), 2)
+        end
         local r1,g1,b1 = colors.unpackRGB(colorA)
         local r2,g2,b2 = colors.unpackRGB(colorB)
 
@@ -1352,12 +1637,19 @@ local focused = nil
                     return
                 end
                 if not object.isTint then
-                    object.__index.__index:setBackgroundColor(parseColor(object.pressedColor))
+                    object.__index.__index:setBackgroundColor(parseColor(parseVariable(object, object.pressedColor)))
                 else
-                    object.__index.__index:setBackgroundColor(handleTinting(object.pressedColor, object.defaultColor, object.pressedAlpha))
+                    object.__index.__index:setBackgroundColor(
+                    handleTinting(
+                    parseColor(parseVariable(object, object.pressedColor)),
+                    parseColor(parseVariable(object, object.defaultColor)),
+                    parseColor(parseVariable(object, object.pressedAlpha))))
                 end
             else
-                object.__index.__index:setBackgroundColor(object.defaultColor)
+                local val = parseColor(parseVariable(object, object.defaultColor))
+                if val ~= false then
+                    object.__index.__index:setBackgroundColor(val)
+                end
             end
         else
             if object.deactivatedColor == nil then
@@ -1365,12 +1657,19 @@ local focused = nil
             end
 
             if not object.isTint then
-                object.__index.__index:setBackgroundColor(object.deactivatedColor)
+                object.__index.__index:setBackgroundColor(parseColor(parseVariable(object, object.deactivatedColor)))
             else
                 if object.deactivatedAlpha == nil then
                     return
-                end 
-                object.__index.__index:setBackgroundColor(handleTinting(object.deactivatedColor, object.defaultColor, object.deactivatedAlpha))
+                end
+                -- If you use buttons before things get parented these can fail. Or.. 'ya set the colors wrong. Bozo
+                local val1 = parseColor(parseVariable(object, object.deactivatedColor))
+                local val2 = parseColor(parseVariable(object, object.defaultColor))
+                local val3 = parseColor(parseVariable(object, object.deactivatedAlpha))
+
+                if val1 ~= false and val2 ~= false and val3 ~= false then
+                object.__index.__index:setBackgroundColor(handleTinting(val1, val2, val3))
+                end
             end
         end
     end
@@ -1387,23 +1686,30 @@ local focused = nil
             pressed = false,
         }
 
-        inheritFromInstance(ButtonBuilder, builder, MenuObjectBuilder)
+        builder = inheritFromInstance(ButtonBuilder, builder, MenuObjectBuilder)
 
         builder:enable()
 
-        builder.defaultColor = builder.computedStyle.color or 0xCCCCCC
+        builder.defaultColor = "--semi-dark"
 
-        builder:setBackgroundColor(builder.defaultColor)
-
+        calculateButtonColor(builder)
+        
         builder:addEventCallback(navTypesLUT.click, function (obj, name, path, button, x, y)
+            if builder.deactivated then
+                error("damn...")
+            end
             -- Accept only events that happen directly to us and only left clicks
-            if #path == 1 and button == 1 and not builder.deactivated then
+            if (not builder.deactivated) and #path == 1 and button == 1 then
                 builder.pressed = true
 
                 calculateButtonColor(builder)
 
-                for _,v in pairs(obj.onClickEvents) do
-                    v(x, y)
+                --print("WOAWAHWAH WAH")
+
+                if builder.onClickEvents ~= nil then
+                    for _,v in pairs(builder.onClickEvents) do
+                        v(x, y)
+                    end
                 end
             end
         end)
@@ -1438,6 +1744,16 @@ local focused = nil
 
         return self.__index.__index:enable()
     end
+    function ButtonBuilder:addChild(object)
+        self.__index.__index:addChild(object)
+        calculateButtonColor(self)
+        return self
+    end
+    function ButtonBuilder:setParent(object)
+        self.__index.__index:setParent(object)
+        calculateButtonColor(self)
+        return self
+    end
 
     function ButtonBuilder:disable()
         self.deactivated = true
@@ -1449,7 +1765,7 @@ local focused = nil
     end
 
     function ButtonBuilder:setBackgroundColor(color)
-        self.defaultColor = parseColor(color)
+        self.defaultColor = color
         calculateButtonColor(self)
         return self
     end
@@ -1458,11 +1774,12 @@ local focused = nil
 
     local function recalcTextColor(builder)
         if builder.focused then
-            builder.__index.__index:setTextColor(builder.textColor)
+            builder.__index.__index:setTextColor(parseColor(builder.textColor))
         else
-            builder.__index.__index:setTextColor(handleTinting(builder.unfocusedColor, builder.textColor, builder.unfocusedAlpha))
+            builder.__index.__index:setTextColor(handleTinting(parseColor(parseVariable(builder, builder.unfocusedColor)), parseColor(parseVariable(builder, builder.textColor)), parseColor(parseVariable(builder, builder.unfocusedAlpha))))
         end
     end
+
     function TextInputBuilder.new()
         local builder = {
             storedText = "",
@@ -1511,7 +1828,7 @@ local focused = nil
             table.insert(builder.onSubmit, callback)
         end
 
-        builder:setBackgroundColor("#CCCCCC").gObject:setStyle("textAlign", "topleft")
+        builder:setBackgroundColor("--semi-dark").gObject:setStyle("textAlign", "topleft")
 
         -- Char can only represent typing inputs. This excludes inputs such as backspace, arrow keys, and a few others you'd use for a fully featured typing experience
         local _, ev = coreInstance:registerEvent("char", function (_ev, char)
@@ -1532,9 +1849,7 @@ local focused = nil
                     local prev = builder.storedText
                     local leftHalf = ""
 
-                    if builder.cursorPos > 2 then
-                        leftHalf = string.sub(builder.storedText, 1, (builder.cursorPos >= 2) and builder.cursorPos - 2 or 1) or ""
-                    end
+                    leftHalf = string.sub(builder.storedText, 1, (builder.cursorPos >= 2) and builder.cursorPos - 2 or 1) or ""
                     
                     local rightHalf = string.sub(builder.storedText, builder.cursorPos) or ""
 
@@ -1596,7 +1911,7 @@ local focused = nil
             self.seekPos = self.seekPos - 1
         end
 
-        self:setText(string.sub(self.storedText, self.seekPos, self.seekPos + self.computedStyle.width))
+        self:setText(string.sub(self.storedText, self.seekPos, self.seekPos + self.computedStyle.width - 1))
     end
 
     function TextInputBuilder:setSize(width, height)
@@ -1765,7 +2080,91 @@ local focused = nil
         return self
     end
 
+        local ScrollBarBuilder = {}
+    function ScrollBarBuilder:new()
+        local builder = {
+            backgroundObj = MenuObjectBuilder:new(),
+            scrollHandle = MenuObjectBuilder:new(),
+            scrollMin = 0,
+            scrollMax = 100,  -- SET THESE LATER
+            scrollCurrent = 0,
+        }
+        
+        inheritFromInstance(self, builder, MenuObjectBuilder)
+        
+        builder:setSize("1px", "100%")
 
+        builder:setPosition("100%", "2px", "1px")
+        builder:setBackgroundColor("--semi-dark")
+
+        builder:enable()
+
+        -- This is obvious, but forgetting it would be disasterous.
+        builder.backgroundObj:setParent(builder):setSize("100%", "100%")
+        builder.scrollHandle:setParent(builder.backgroundObj):setSize("1px","1px")
+
+        return builder
+    end
+
+    function ScrollBarBuilder:computeHandleSize()
+        
+        return self
+    end
+
+    local ScrollAreaBuilder = {}
+
+    -- It's mostly just a basic menu object that scrolls
+    function ScrollAreaBuilder:new()
+        -- Derivation is based.
+        local builder = {
+            scrollbarObject = ScrollBarBuilder:new(), -- TODO
+            scrollPos = 0,
+            lowestElement = 0,
+        }
+
+        inheritFromInstance(ScrollAreaBuilder, builder, MenuObjectBuilder)
+        
+        builder.scrollbarObject:setParent(builder)
+
+        builder:addEventCallback(navTypesLUT.scroll, function (obj, name, path, dir)
+            builder.scrollPos = builder.scrollPos - dir
+            if builder.scrollPos < (builder.lowestElement * -1) or builder.scrollPos > 0 then
+                builder.scrollPos = builder.scrollPos + dir
+            else
+                for i,v in pairs(builder.children) do
+                    if v ~= builder.scrollbarObject then
+                        if v.setY ~= nil then
+                            if type(v.originalY) == "string" and string.sub(v.originalY, 0, 5) == "eval(" then
+                                -- Use the special function for math.
+                                v:setY("eval(" .. string.sub(v.originalY, 6, #v.originalY - 1) .. "+" .. builder.scrollPos .. ")")
+                            else
+                                -- Use the special function for math.
+                                v:setY("eval(" ..v.originalY .. "+" .. builder.scrollPos .. ")")
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        return builder
+    end
+
+    function ScrollAreaBuilder:addChild(object)
+
+        self.__index.__index:addChild(object)
+        object.originalY = object.style.y
+        if object.recalculateStyles ~= nil then
+            object:recalculateStyles("y")
+            object:recalculateStyles("height")
+            self:recalculateStyles("height")
+
+
+            object.lowestElement = math.max(0, object.lowestElement or 0, (object.computedStyle.y + (object.computedStyle.height or 0)) - self.computedStyle.height)
+        end
+
+        object.gObject:setMask(self.gObject) -- uhhh yes?
+    end
 
     local function init(modules, core)
         coreInstance = core
@@ -1835,7 +2234,7 @@ local focused = nil
 
                 }
             },
-            version = "0.4.0",
+            version = "0.5.1",
             priority = 1,
         },
         menuObjectBuilder = MenuObjectBuilder,

@@ -178,7 +178,8 @@ local function validateError(msgObj)
 end
 
 -- For encrypted messages.
-local function sendMessage(message, isHeartbeat, endpoint)
+local function sendMessage(message, isHeartbeat, endpoint, async)
+    local f = function ()
     local queuedMessaged = {}
     iter = (iter or 0) + 1
     local messageTable = {iter = iter, nonce = ecc.random.random():toHex()}
@@ -201,7 +202,7 @@ local function sendMessage(message, isHeartbeat, endpoint)
     local mac = ecc.sha256.hmac(msg, sharedSecret)
     
     rednet.send(id, {payload = msg, mac = tostring(mac)}, endpoint)
-
+    
     local response = table.pack(rednet.receive(nil, 3)) -- check for any ack. These are encrypted 
 
     -- Wait for acknowledgement.
@@ -245,12 +246,22 @@ local function sendMessage(message, isHeartbeat, endpoint)
     end
     iter = newIter
     return true, queuedMessaged
+    
+    end
+
+    if async then
+    local thrd = coreInstance:addThread(f)
+    else
+        return f()
+    end
+
 end
 
 local errorcode = nil
 local function disconnect(reasonCode)
     reasonCode = reasonCode or 000
     if BedrockNetworkDevice.connected == true then
+        BedrockNetworkDevice.connected = false
         BedrockNetworkDevice.sendMessage({disconnectRequest = true, reasonCode = reasonCode}, false, endpointsLookup.encryptedMessageProtocol)
         errorcode = 0
     else
@@ -260,6 +271,7 @@ local function disconnect(reasonCode)
     rednet.close()
 end
 
+local firstConnection = true
 local function run()
     endpointsLookup = BedrockNetworkDevice.endpoints
     -- You may not interact with these anymore after running.
@@ -374,8 +386,6 @@ local function run()
                 fh.write(serialized) -- Sent as a string
                 serverKey = challenge.signatureKey
             else
-                print(serverKey, contents.pubKey, challenge.signature)
-
                 if not ecc.verify(serverKey, challenge.body, challenge.signature) then
                     if not BedrockNetworkDevice.onKeyFailure then
                         error("Server has invalid signature!", 0)
@@ -421,25 +431,25 @@ local function run()
             end
 
             iter = 0
-            local lastMsg = os.epoch("utc")
-            parallel.waitForAny(function ()
-                -- HEARTBEAT HALF
-                -- This isn't security this is staggering to try and avoid DOS. (or the server doing DOS protection)
-                local ranTime = heartBeatProperties.min
-                while true do
-                        os.sleep(0) -- sleep isn't always accurate as it's based on MC tick. ALWAYS check with a rt source like epoch
-                        if os.epoch("utc") - lastMsg >= ranTime then
-                        local valid, errMsg, code = sendMessage(ecc.random.random(), true, endpointsLookup.encryptedMessageProtocol)
-                        
-                        if not valid then
-                            return valid, errMsg, code
-                        end
 
-                        lastMsg = os.epoch("utc")
-                        ranTime = math.random(heartBeatProperties.min, heartBeatProperties.max)
-                        end
+            local callbackFunc = nil
+            local timerObj = nil
+
+            -- What? Infinite parallelism and queuing not your style?
+            callbackFunc = function ()
+                local valid, errMsg, code = sendMessage(ecc.random.random(), true, endpointsLookup.encryptedMessageProtocol)
+                
+                if not valid then
+                    return valid, errMsg, code
                 end
-            end, function ()
+                
+                -- This isn't security this is staggering to try and avoid DOS. (or the server doing DOS protection)
+                _, timerObj = coreInstance:queueTimer(math.random(heartBeatProperties.min, heartBeatProperties.max), callbackFunc)
+            end
+
+            _, timerObj = coreInstance:queueTimer(heartBeatProperties.min, callbackFunc)
+
+            parallel.waitForAny(function ()
                 -- MESSAGE RECIEVE HALF
                 while true do
                     -- Wrapped in a function so I can return without breaking my parallel.
@@ -482,7 +492,7 @@ local function run()
                     end
                     local err, res, msg, code = runMessageLoop()
                     if err == true and res == true then
-                        error(tostring(err) .. " " .. tostring(res) .. " " .. tostring(msg) .. " " .. tostring(code))
+                        --error(tostring(err) .. " " .. tostring(res) .. " " .. tostring(msg) .. " " .. tostring(code))
                         errorcode = code
                         os.sleep(1.5) -- Wait a bit before retry
                         return -- This allows quitting in the event of the server returning an error
@@ -495,6 +505,8 @@ local function run()
                 end
             end)
 
+            timerObj:Cancel()
+            
             if type(BedrockNetworkDevice.onDisconnect) == "function" then
                 BedrockNetworkDevice.onDisconnect()
             end

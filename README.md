@@ -1,4 +1,9 @@
+
+
 # ![BedrockAPI Logo](/logo.png "Logo")
+
+If you appreciate what I make here, then feel free to support me on Ko-Fi!  
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/H2H71UVDOI)
 
 Welcome to Bedrock API's wiki page! Bedrock API is a suite of extensible systems coordinated by Bedrock Core. This project is intended to allow for modules implementing high level and low level abstractions, although the included modules are more focused on basic lower level abstractions.
 
@@ -30,13 +35,13 @@ COMING SOON!
 
 #### Conventional usage method
 
- [Create Your First Project](Guides.Your-First-Project)
+ [Create Your First Project](https://github.com/ComplesaCwiminal/BedrockAPI/wiki/Guides.Your-First-Project)
 
 -----
 
 ### Overviews
 
-- [Module Overview](Modules.Module-Overview)
+- [Module Overview](https://github.com/ComplesaCwiminal/BedrockAPI/wiki/Modules.Module-Overview)
 
 ### Modules  
 

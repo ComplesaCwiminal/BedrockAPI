@@ -6,7 +6,7 @@ local ecc = require("Utils.ecc")
 -- We use no modules. We need only a very simple core.
 local coreInstance
 
-BedrockNetworkServer = {}
+local BedrockNetworkServer = {}
 local bedrockCore
 
 peripheral.find("modem", rednet.open)
@@ -32,10 +32,6 @@ local authActions = {}
 local connectActions = {}
 
 local endpointsLookup
-
-
-
-
 
 local clients = {}
 
@@ -263,7 +259,8 @@ local function getClient(ClientID, SessionID, msg)
         nonces = {}, -- We'll use this after encryption to prevent replay attacks
         seenIters = {},
         lastMessageiter = nil,
-        timer = nil
+        timer = nil,
+        awaitingRekey = false,
     }
 
     clients[ClientID] = client
@@ -302,6 +299,32 @@ local function getClient(ClientID, SessionID, msg)
         -- We have successfully authed and heartbeat, so cancel that.
         client.timer:Cancel()
         client.isAuthenticated = true
+        client.awaitingRekey = false
+        
+        client.keyTimer = nil
+        local rekeyFunc
+        rekeyFunc = function ()
+            client.awaitingRekey = true
+
+            -- Make sure the old one gets deleted. (Just in case)
+            client.keyTimer:Cancel()
+
+            -- Denote this won't instantly invalidate their session.
+            sendMessage(client, { rekeyingRequest = true, })
+            
+            -- This is what invalidates their session.
+            coreInstance:queueTimer(5000, function()
+                if client.awaitingRekey then
+                    client:disconnect(001) -- Unknown auth error
+                end
+            end)
+
+            -- SPIN.
+            _, client.keyTimer = coreInstance:queueTimer(BedrockNetworkServer.keyPersistenceLength, rekeyFunc)
+        end
+        
+        _, client.keyTimer = coreInstance:queueTimer(BedrockNetworkServer.keyPersistenceLength, rekeyFunc)
+
         for i,v in pairs(authActions) do
             if type(v.callback) == "function" then
                 v.callback(client)
@@ -432,15 +455,24 @@ local function handleTrustedMessage(sender, message, protocol)
     local anyValid = false
     local toRun = {}
     local tbl = message -- parity with older version protocol
-    for i,v in pairs(handlers) do
-        if v.precondition(sender, tbl, protocol) then
-            anyValid = true
-            table.insert(toRun, function ()
-                v.callback(sender, tbl, protocol)
-            end)
+
+    if clients[sender].awaitingRekey == false then
+        for i,v in pairs(handlers) do
+            if v.precondition(sender, tbl, protocol) then
+                anyValid = true
+                table.insert(toRun, function ()
+                    v.callback(sender, tbl, protocol)
+                end)
+            end
+        end
+        parallel.waitForAll(table.unpack(toRun)) -- parallelism is a boon in this env.
+    else
+        if tbl.rekeyingResponse ~= nil and tbl.publicKey ~= nil then
+            clients[sender].sharedSecret = ecc.exchange(clients[sender].privateKey, tbl.publicKey)
+            clients[sender].awaitingRekey = false
         end
     end
-    parallel.waitForAll(table.unpack(toRun)) -- parallelism is a boon in this env.
+    
     return anyValid
 end
 
@@ -713,6 +745,7 @@ BedrockNetworkServer = {
 
     nEKeyFile = "sign.key",
 
+    keyPersistenceLength = 1500000, -- about 15m
     preservationModeLength = 30000,
     singleClientMaxMessagesPerMin = 72, -- This is a maximum. It'll never let you have more than this
     singleClientBlockTime = 15000, -- 15 seconds

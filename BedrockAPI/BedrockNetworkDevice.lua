@@ -316,6 +316,16 @@ local function run()
 
     end
     
+    -- Add a built in handler to handle rekeying. Rekeying for pfs can only happen while encrypted.
+    addHandler(function(msg) return msg.rekeyingRequest ~= nil and msg.publicKey ~= nil end,
+    function (msg)
+        local priv, pub = ecc.keypair(ecc.random())
+
+        sendMessage({rekeyingResponse = true, publicKey = pub})
+        -- You have to do this after for the simple fact that the above message needs to be encrypted with the previous key. Not for any reason. I just felt like it.
+        sharedSecret = ecc.exchange(priv, msg.publicKey)
+    end
+    )
     while errorcode ~= 0 do
         BedrockNetworkDevice.connected = false
         

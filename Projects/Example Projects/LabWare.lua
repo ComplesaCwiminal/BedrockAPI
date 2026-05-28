@@ -89,16 +89,15 @@
         for i,v in pairs(devices) do
             if cmdDeviceCache[i] == nil then
                 local obj = bedrockUI.buttonBuilder:new():setSize("100%", "2px"):setY((cmdOffset * 2)):setZ(1055):setText(v.deviceName and v.deviceName .. " (" .. i ..")" or i):setParent(tabs.commands.autoShow.scrollArea):enable()
-                term.setTextColor(colors.pink)
-                print(obj)
-                for i,v in pairs(obj) do
-                    print(i,v)
-                end
+
                 obj:addOnClick(function ()
+                    obj:setText("AAAAAAAAAAAA")
                     error("an error has occured")
                 end)
+
                 tabs.commands.autoShow["device_" .. tostring(i)] = obj
                 obj.tag = "device_" .. tostring(i)
+                
                 cmdDeviceCache[i] = cmdOffset
                 table.insert(sectionObjects, obj)
 

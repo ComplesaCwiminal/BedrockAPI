@@ -972,6 +972,8 @@ local function tick()
     -- finally I murdered my multishell nemesis. You'd be surprised
     local nonce = math.random(1, 0xFFFFFFFFFFFF) -- probably wrote that right
 
+    -- Fixes nonce collisions.
+        -- Technically this can go forever.
     while nonces[nonce] ~= nil do
         nonce = math.random(1, 0xFFFFFFFFFFFF)
     end

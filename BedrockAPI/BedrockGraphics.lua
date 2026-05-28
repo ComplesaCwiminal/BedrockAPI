@@ -13,6 +13,9 @@
     -- Side note. Bedrock Graphics isn't actually supposed to be html. It's not designed for interaction, but is more meant to only be for rendering. Some would maybe call that a scene graph.
     -- To explain: Bedrock graphics is only a higher level way to denote how to draw to the screen with retained mode rendering
     -- As a result many real HTML features fall outside of our scope. That includes any and all interactivity, and many effects that result.
+
+        -- 私はばかですね？　楽しみ！
+
     local BedrockGraphics = {}
 
     local bedrockCore = nil
@@ -389,8 +392,10 @@
 
                 -- Redirect to the buffer that IS NOT visible. 
                 if monitor.buffers[1].isVisible() then
+                    monitor.buffers[2].setVisible(false) -- MAKE SURE
                     term.redirect(monitor.buffers[2])
                 else
+                    monitor.buffers[1].setVisible(false)
                     term.redirect(monitor.buffers[1])
                 end
                 
@@ -1102,16 +1107,7 @@
                     return 2 ^ (i - 1), v, i
                 end
             end
-
-            local fh = fs.open("/error.log", "w")
-
-            -- If you got here, then you are firmly in traceback territory. Sorry! Well not traceback, but I mean, close.
-            for i,v in pairs(renderableSubset) do
-                fh.writeLine(tostring(i) .. ": " .. tostring(v.value))
-            end
-            fh.writeLine("closest: " .. tostring(closest))
-            fh.close()
-
+ 
             -- No color being found means there were no colors to search. We shouldn't be able to get here, hence the error.
             error("No color found for color: " .. code .. "(" .. #renderableSubset .. " Colors in the palette)")
             return nil, "No color found for color: " .. code
@@ -1283,9 +1279,6 @@
                 renderableSubset[closestI].avgInstances = renderableSubset[closestI].avgInstances ~= nil and renderableSubset[closestI].avgInstances + 1 or 1
             end
             
-
-
-
             monitor.colorsInUse = {}
             for i,v in ipairs(renderableSubset) do
                 if v.avgInstances ~= nil then

@@ -289,9 +289,10 @@ local focused = nil
         local clickedObjects = {}
 
         if menus[monitor] ~= nil then
+            local clickedObj
+
             for i,v in pairs(menus[monitor]) do
                 local _, candidateObjects = v.quadTrees[monitor]:grab(x,y)
-                local clickedObj
 
                 for i2,v2 in pairs(candidateObjects) do
                     -- Grouping it like this does nothing. It's just a mental seperation
@@ -306,17 +307,17 @@ local focused = nil
                         end
                         
                         if thisZ ~= nil and thisDepth ~= nil then
-                            if (clickedObj == nil or ((thisZ > thatZ or (thisZ == thatZ and thisDepth >= thatDepth))) and v2.objRef.focusable and (v2.objRef.computedStyle.focusable == nil or v2.objRef.computedStyle.focusable)) then
-                                clickedObj = v2.objRef
+                            if(v2.objRef.focusable and (v2.objRef.computedStyle.focusable or v2.objRef.computedStyle.focusable == nil)) then
+                                if (clickedObj == nil or thatZ == nil or thatDepth == nil or ((thisZ > thatZ or (thisZ == thatZ and thisDepth >= thatDepth)))) then
+                                    clickedObj = v2.objRef
+                                end
                             end
                         end
                     end
                 end
-
-                table.insert(clickedObjects, clickedObj)
             end
 
-            return clickedObjects
+            return clickedObj
         end
 
         return nil
@@ -348,13 +349,7 @@ local focused = nil
         -- Get the menu object we clicked on.
         local clickedObjs = calculateClickedObjects(x,y, monitor)
 
-        local clickedObj = clickedObjs ~= nil and clickedObjs[1] or nil
-
-        if clickedObj == nil then
-            return
-        end
-        term.setTextColor(colors.purple)
-        print("AAAAAAAAAAAAAAAAAAAAAAAAA")
+        local clickedObj = clickedObjs ~= nil and clickedObjs or nil
 
         -- Unlike focusing. Any new click defocuses old stuff.
         if lastFocusObj ~= nil then
@@ -363,6 +358,16 @@ local focused = nil
 
         -- The top set just means the button is down. If theres an object then something is 'held'
         mouseButtonsDown[button] = clickedObj
+
+        if clickedObj == nil then
+            fh.writeLine("NOTHING CLICKED" .. x .. " " .. y)
+            return
+        end
+
+        for i, v in pairs(clickedObj) do
+            fh.writeLine(tostring(i) .. ": " .. tostring(v))
+        end
+        fh.writeLine(x .. " " .. y)
 
         if clickedObj.focusable then
             lastFocusObj = clickedObj
@@ -498,6 +503,30 @@ local focused = nil
     -- Turns a complex unit (eg. %, vw, vh, etc.) into a raw pixel value. 
     local function computeNumericalUnit(object, givenNum, valueName, refObject)
         if type(givenNum) == "string" then
+            -- These are units that do not use numbers. Just at all
+            local specialUnitSwitchboard = {
+                ["auto"] = function ()
+                    if valueName == "width" or valueName == "w" then
+                        if object.corners ~= nil and object.corners.bottomRight ~= nil then
+                            -- The width should go to the bottom right, so subtract by the starting position to get width
+                            return object.absolutes.x - object.corners.bottomRight.x, true
+                        end
+                    elseif valueName == "height" or valueName == "h" then
+                        if object.corners ~= nil and object.corners.bottomRight ~= nil then
+                            return object.absolutes.y - object.corners.bottomRight.y, true
+                        end
+                    end
+
+                    return givenNum, false
+                end,
+
+            }
+            
+            -- The given num isn't parsed so it's the whole unit to parse
+            if specialUnitSwitchboard[givenNum] ~= nil then
+                return specialUnitSwitchboard[givenNum]()
+            end
+
             -- There should not be three or more matches
             local num, unit, err = givenNum:match("^(-?%d+%.?%d*)%s*(.*)$")
  
@@ -835,16 +864,13 @@ local focused = nil
         
         local objectInstance = inherited:new()
         setmetatable(copy, {__index = objectInstance})
-        
         copy.__index = objectInstance
 
+
+        setmetatable(object, {__index = copy})
         -- This just allows you to get your base/super or whatever. You need it, trust me.
         object.__index = copy
 
-        setmetatable(object, {__index = copy})
-
-
-        
         return object
     end
 
@@ -908,7 +934,12 @@ local focused = nil
             children = {},
             navigations = {}, -- The directions and their associatedbuttons
             events = {}, -- this is spiraling out of control fast... Whatever I need it feature filled.
+
         }
+        builder.corners = {
+                topLeft = nil,
+                bottomRight = nil,
+            }
 
         builder.style = {
             x = builder.x,
@@ -1089,7 +1120,21 @@ local focused = nil
         flagNodeDirty(self) -- Quad tree? in the modern era? It's more likely than you'd think
         end
 
-
+        if self.parent ~= nil then
+            if self.parent.corners.topleft == nil then
+                self.parent.corners.topleft = {x = self.absolutes.x, y = self.absolutes.y}
+            else
+                self.parent.corners.topleft.x = self.parent.corners.topleft.x <= self.absolutes.x and self.parent.corners.topleft.x or self.absolutes.x
+                self.parent.corners.topleft.y = self.parent.corners.topleft.y <= self.absolutes.y and self.parent.corners.topleft.y or self.absolutes.y
+            end
+            
+            if self.parent.corners.bottomRight == nil then
+                self.parent.corners.bottomRight = {x = self.absolutes.x, y = self.absolutes.y}
+            else
+                self.parent.corners.bottomRight.x = self.parent.corners.bottomRight.x >= self.absolutes.x + self.computedStyle.width and self.parent.corners.bottomRight.x or self.absolutes.x + self.computedStyle.width
+                self.parent.corners.bottomRight.y = self.parent.corners.bottomRight.y >= self.absolutes.y + self.computedStyle.height and self.parent.corners.bottomRight.y or self.absolutes.y + self.computedStyle.height
+            end
+        end
         if self.children ~= nil then
             for i,v in pairs(self.children) do
                 v:recalculateStyles(style)
@@ -1154,6 +1199,7 @@ local focused = nil
         if value ~= nil then
             self.style.x = value
             self:recalculateStyles("x")
+            flagNodeDirty(self)
         end
 
         return self
@@ -1162,6 +1208,7 @@ local focused = nil
         if value ~= nil then
             self.style.y = value
             self:recalculateStyles("y")
+            flagNodeDirty(self)
         end
 
         return self
@@ -1170,6 +1217,7 @@ local focused = nil
         if value ~= nil then
             self.style["z-index"] = value
             self:recalculateStyles("z-index")
+            flagNodeDirty(self)
         end
 
         return self
@@ -1184,6 +1232,7 @@ local focused = nil
             self.style.height = h
             self:recalculateStyles("height")
         end
+        flagNodeDirty(self)
 
         return self
     end
@@ -1288,6 +1337,8 @@ local focused = nil
             Object.quadNode = nil
         end
 
+        Object.depth = (self.depth or 0) + 1
+        
         table.insert(self.children, Object)
 
         recursiveReMenu(Object, self)
@@ -1491,6 +1542,7 @@ local focused = nil
             Object.quadNode = nil
         end
 
+        Object.depth = (self.depth or 0) + 1
         table.insert(self.children, Object)
         Object.parent = self
 
@@ -1601,6 +1653,7 @@ local focused = nil
         self.gObject:setBackgroundColor(color)
         return self
     end
+    
     function MenuBuilder:setVariable(variable, value)
         self.style.variables[variable] = value
 
@@ -1686,42 +1739,39 @@ local focused = nil
             pressed = false,
         }
 
-        builder = inheritFromInstance(ButtonBuilder, builder, MenuObjectBuilder)
+        local b = inheritFromInstance(ButtonBuilder, builder, MenuObjectBuilder)
 
-        builder:enable()
+        b:enable()
 
-        builder.defaultColor = "--semi-dark"
+        b.defaultColor = "--semi-dark"
 
-        calculateButtonColor(builder)
+        calculateButtonColor(b)
         
-        builder:addEventCallback(navTypesLUT.click, function (obj, name, path, button, x, y)
-            if builder.deactivated then
-                error("damn...")
-            end
+        b:addEventCallback(navTypesLUT.click, function (obj, name, path, button, x, y)
             -- Accept only events that happen directly to us and only left clicks
-            if (not builder.deactivated) and #path == 1 and button == 1 then
-                builder.pressed = true
+            if (not b.deactivated) and #path == 1 and button == 1 then
+                b.pressed = true
 
-                calculateButtonColor(builder)
+                calculateButtonColor(b)
 
                 --print("WOAWAHWAH WAH")
 
-                if builder.onClickEvents ~= nil then
-                    for _,v in pairs(builder.onClickEvents) do
+                if b.onClickEvents ~= nil then
+                    for _,v in pairs(b.onClickEvents) do
                         v(x, y)
                     end
                 end
             end
         end)
 
-        builder:addEventCallback(navTypesLUT.release, function (obj, name, path, button, x, y)
+        b:addEventCallback(navTypesLUT.release, function (obj, name, path, button, x, y)
             if button == 1 then
-                builder.pressed = false
-                calculateButtonColor(builder)
+                b.pressed = false
+                calculateButtonColor(b)
             end
         end)
 
-        return builder
+        return b
     end
 
     function ButtonBuilder:addOnClick(...)
@@ -1739,10 +1789,10 @@ local focused = nil
 
     function ButtonBuilder:enable()
         self.deactivated = false
-
+        self.__index.__index:enable()
         calculateButtonColor(self)
 
-        return self.__index.__index:enable()
+        return self
     end
     function ButtonBuilder:addChild(object)
         self.__index.__index:addChild(object)
@@ -2165,11 +2215,59 @@ local focused = nil
 
         object.gObject:setMask(self.gObject) -- uhhh yes?
     end
+    
+    local dmp
+    local depth = 0
+
+    local function recurse(obja)
+        if type(obja) == "table" then
+            for d = 0, depth do
+                dmp.write("\t")
+            end
+            if obja.gObject ~= nil then
+                dmp.writeLine(obja.gObject.innerText)
+            end
+
+            for i3,v3 in pairs(obja) do
+                for d = 0, depth do
+                    dmp.write("\t")
+                end
+                
+                dmp.writeLine(tostring(i3) .. ": " .. tostring(v3))
+            end
+            if type(obja.children) == "table" then
+                for i4, v4 in pairs(obja.children) do
+                    depth = depth + 1
+                    recurse(v4)
+                    depth = depth - 1
+                end
+            end
+        else
+            for d = 0, depth do
+                dmp.write("\t")
+            end
+            dmp.writeLine(tostring(obja))
+        end
+    end
 
     local function init(modules, core)
         coreInstance = core
         BedrockGraphics = modules["Graphics"]
         BedrockInput = modules["Input"]
+
+        core:registerEvent("key", function (_ev, key)
+            if key == keys.f12 then
+                dmp = fs.open("menuDump.dbg", "w+")
+                for i,v in pairs(menus) do
+                    dmp.writeLine(tostring(i) .. ": " .. #v)
+                    for i2,v2 in pairs(v) do
+                        recurse(v2)
+                    end
+                    
+                end
+                dmp.close()
+            end
+        end)
     end
 
     local function main(deltaTime)
@@ -2188,7 +2286,7 @@ local focused = nil
     end
 
     local function cleanup()
-
+        fh.close()
     end
 
     BedrockUI = {

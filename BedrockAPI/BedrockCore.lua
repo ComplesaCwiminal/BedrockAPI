@@ -462,6 +462,24 @@ local function checkVersion(versionGot, versionExpected, operand)
     return false, "Error in version checking?"
 end
 
+local function canRequire(modA, modB)
+    local canRequire = true
+
+    if type(modB.moduleDefinition.requirementWhitelist) == "table" then
+        canRequire = (modB.moduleDefinition.requirementWhitelist[modA.moduleDefinition.moduleName] ~= nil)
+    end
+    -- If can require is false then skip this block, since well.. can't get worse.
+    if type(modB.moduleDefinition.requirementBlacklist) == "table" and canRequire then
+        canRequire = (modB.moduleDefinition.requirementBlacklist[modA.moduleDefinition.moduleName] == nil)
+    end
+
+    if modB.moduleDefinition.requirementBlacklist == "*" then
+        return false
+    end
+
+    return canRequire
+end
+
 --- Resolves all dependencies for a core.  
 --- This means checking versions, and collating requirements, optional modules, and checking for conflicts.
 --- @param core table  # The core we check the modules of
@@ -484,14 +502,23 @@ local function resolveDependencies(core, module)
                 if not checkVersion(coreModules[v2.moduleName].moduleDefinition.version, v2.version, v2.operand) then
                     error("Version of module:" .. v2.moduleName .. " is incorrect! (Expected version " .. v2.version .. " or higher, Got version " .. coreModules[v2.moduleName].moduleDefinition.version, 0)
                 end
-                returnedModules[v2.moduleName] = coreModules[v2.moduleName]
+                if canRequire(module, coreModules[v2.moduleName]) then
+                    returnedModules[v2.moduleName] = coreModules[v2.moduleName]
+                else
+                    error("Module: " .. coreModules[v2.moduleName].moduleDefinition.moduleName .. " does not allow " .. module.moduleDefinition.moduleName .. " to require it! Is this a mistake, or are you malicious?")
+                end
             end
 
             for _,v2 in ipairs(module.moduleDefinition.dependencies.optional) do
                 if coreModules[v2.moduleName] ~= nil and checkVersion(coreModules[v2.moduleName].moduleDefinition.version, v2.version, v2.operand) then
-                    returnedModules[v2.moduleName] = coreModules[v2.moduleName]
+                    if canRequire(module, coreModules[v2.moduleName]) then
+                        returnedModules[v2.moduleName] = coreModules[v2.moduleName]
+                    else
+                        error("Module: " .. v2.moduleName .. " does not allow you to require them! Is this a mistake, or are you malicious?")
+                    end
                 end
             end
+            
             for _,v2 in ipairs(module.moduleDefinition.dependencies.conflicts) do
                 -- If you pcall it and force it to go through then we'll force conflicts to go through
                 if coreModules[v2.moduleName] ~= nil and checkVersion(coreModules[v2.moduleName].moduleDefinition.version, v2.version, v2.operand) then
